@@ -12,6 +12,7 @@ dependencies = [
     "num2words",
     "pypandoc",
     "datetime",
+    "fitz",
 ]
 
 [tool.uv]
