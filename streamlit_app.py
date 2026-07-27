@@ -108,7 +108,7 @@ with col1:
         amount_num = st.number_input(
             "金额 $ (amount)",
             min_value=0.0,
-            value=1250.50,
+            value=0.00,
             step=0.01,
             format="%.2f",
         )
@@ -124,9 +124,25 @@ with col1:
     with col_chk1:
         check_number = st.text_input("支票编号 (number)", value="1001")
     with col_chk2:
-        account = st.text_input("账号 (account)", value="ACC-883921")
+    # 1. 提供下拉选项（常用账号 + Other）
+        selected_option = st.selectbox(
+            "选择账号预设",
+            options=["8652", "3738", "Other"],
+            index=0  # 默认选中第一个
+        )
+    
+        # 2. 根据选择决定账号的值
+        if selected_option == "8652":
+            account = "ACC-8652"
+        elif selected_option == "3738":
+            account = "ACC-3738"
+        else:
+            # 选择 Other 时，显示输入框让用户手动填
+            account = st.text_input("手动输入账号", value="ACC-883921")
 
-    memo = st.text_area("备忘/用途 (memo)", value="Invoice Payment")
+    # 提示：这时的 `account` 变量里就已经拿到最终的账号字符串了！
+
+    memo = st.text_area("memo", value="Deposit Refund")
 
     # 建立对应你 PDF 里的变量映射字典
     replacements = {
@@ -156,8 +172,6 @@ with col2:
                 use_container_width=True,
             )
 
-            st.markdown("---")
-            display_pdf_preview(filled_pdf)
 
         except Exception as e:
             st.error(f"处理 PDF 时出错: {str(e)}")
