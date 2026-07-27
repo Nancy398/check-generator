@@ -5,4 +5,3 @@ inflect
 num2words
 pypandoc
 datetime
-fitz
