@@ -5,6 +5,7 @@ from num2words import num2words  # 用于将数字转换为英文大写
 from datetime import date
 import os
 from PyPDF2 import PdfReader, PdfWriter
+import fitz
 
 
 st.set_page_config(
