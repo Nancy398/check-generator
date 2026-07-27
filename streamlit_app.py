@@ -2,7 +2,7 @@ import base64
 import io
 import os
 from datetime import date
-import fitz  # 依赖库 PyMuPDF
+# import fitz  # 依赖库 PyMuPDF
 from num2words import num2words
 import streamlit as st
 from io import BytesIO
