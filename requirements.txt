@@ -2,6 +2,6 @@ streamlit
 pymupdf
 PyPDF2
 inflect
-num2words>=0.5.13
+num2words
 pypandoc
 datetime
