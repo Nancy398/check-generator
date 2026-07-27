@@ -112,7 +112,7 @@ with col1:
             step=0.01,
             format="%.2f",
         )
-        amount_str = f"${amount_num:,.2f}"
+        amount_str = f"{amount_num:,.2f}"
 
     # 自动算出大写英文，也可手动微调
     auto_words = number_to_words_usd(amount_num)
