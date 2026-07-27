@@ -2,7 +2,7 @@ import streamlit as st
 from io import BytesIO
 # import pypandoc
 from num2words import num2words  # 用于将数字转换为英文大写
-from datetime import datetime
+from datetime import date
 import os
 from PyPDF2 import PdfReader, PdfWriter
 
