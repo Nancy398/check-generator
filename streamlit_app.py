@@ -101,7 +101,7 @@ with col1:
     input_date = st.date_input("日期 (date)", value=date.today())
     date_str = input_date.strftime("%m/%d/%Y")
 
-    name = st.text_input("收款人 (name)", value="John Doe")
+    name = st.text_input("收款人 (name)", value=" ")
 
     col_amt1, col_amt2 = st.columns([1, 1])
     with col_amt1:
