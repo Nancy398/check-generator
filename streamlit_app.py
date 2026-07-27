@@ -1,3 +1,9 @@
+
+import sys
+import streamlit as st
+
+st.write(sys.executable)
+st.write(sys.version)
 import base64
 import io
 import os
@@ -9,6 +15,7 @@ from io import BytesIO
 import pypandoc
 import os
 from PyPDF2 import PdfReader, PdfWriter
+
 
 st.set_page_config(
     page_title="Check Generator", page_icon="🧾", layout="wide"
