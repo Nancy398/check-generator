@@ -1,5 +1,6 @@
 import streamlit as st
 import io
+import base64
 # import pypandoc
 from num2words import num2words  # 用于将数字转换为英文大写
 from datetime import date
