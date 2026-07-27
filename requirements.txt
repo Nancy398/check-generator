@@ -1,7 +1,0 @@
-streamlit
-pymupdf
-PyPDF2
-inflect
-num2words
-pypandoc
-datetime
