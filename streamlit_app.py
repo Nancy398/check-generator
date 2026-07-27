@@ -5,6 +5,10 @@ from datetime import date
 import fitz  # 依赖库 PyMuPDF
 from num2words import num2words
 import streamlit as st
+from io import BytesIO
+import pypandoc
+import os
+from PyPDF2 import PdfReader, PdfWriter
 
 st.set_page_config(
     page_title="Check Generator", page_icon="🧾", layout="wide"
