@@ -377,7 +377,7 @@ elif mode == "👷 场景二：施工队/工人周薪批量生成":
                 cur_check += 1
 
             if generated_pdfs:
-                save_to_history(records_log)
+                # save_to_history(records_log)
                 st.balloons()
                 st.success(
                     f"🎉 成功生成 {len(generated_pdfs)} 张工人发薪支票！支票号: #{start_check} ~ #{cur_check - 1}"
