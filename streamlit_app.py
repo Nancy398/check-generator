@@ -309,7 +309,7 @@ if mode == "📝 场景一：单张手动生成":
         )
 
 # ==============================================================================
-# 场景 2：多项目/施工队周薪批量开单（支持按账户单独生成与导出 PDF）
+# 场景 2：多项目/施工队周薪批量开单（按账户拆分 PDF + 自动写入 History）
 # ==============================================================================
 elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     st.title("👷 多项目/施工队周薪批量生成")
@@ -346,7 +346,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
 
-    # 定义工人选择改变时的回调函数
+    # 定义工人选择改变时的回调函数：动态更替 Memo
     def update_memo_on_worker_change():
         selected_w = st.session_state.input_w
         st.session_state.input_m = worker_role_map.get(selected_w, "")
@@ -429,11 +429,12 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-    # ----------------- 3. 批量生成与按账户拆分导出 -----------------
+    # ----------------- 3. 批量生成、记录 History 与按账户拆分导出 -----------------
     if not df_payroll_input.empty:
         if st.button(f"🚀 确认无误，批量生成 {len(df_payroll_input)} 张支票", type="primary", use_container_width=True):
-            # 用字典维护： key 为 (Company, Account)，value 为生成的 PDF 列表
+            # 存储按账户分组的 PDF
             account_pdf_dict = {}
+            # 专门用于存入 history.csv / 数据库的数据日志列表
             records_log = []
             max_check_used = {}
 
@@ -473,12 +474,13 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
                 pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
                 
-                # 按账户存放 PDF
+                # 按账户分类存入列表
                 acc_key = (company_name, account_num)
                 if acc_key not in account_pdf_dict:
                     account_pdf_dict[acc_key] = []
                 account_pdf_dict[acc_key].append((cur_check, project_name, worker_name, pdf_res))
 
+                # 📌 写入 History 的标准明细结构
                 records_log.append({
                     "Check Number": cur_check,
                     "Issue Date": pay_date.strftime("%Y-%m-%d"),
@@ -494,16 +496,19 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                     max_check_used[project_name] = cur_check
 
             if records_log:
+                # 1. 写入历史开单记录数据（调用你的通用保存历史函数）
                 save_to_history(records_log)
 
+                # 2. 更新项目中每个账户/工地的下一次起始支票号
                 for p_name, max_num in max_check_used.items():
                     df_projects.loc[df_projects["Project_Name"] == p_name, "Next_Check_Number"] = max_num + 1
                 save_project_presets(df_projects)
 
+                # 3. 清空临时面板
                 st.session_state.payroll_list = []
 
                 st.balloons()
-                st.success(f"🎉 成功生成 {len(records_log)} 张支票！已自动按【公司 / 银行账户】分类。")
+                st.success(f"🎉 成功生成 {len(records_log)} 张支票！数据已自动归档至历史记录（History）。")
 
                 st.markdown("### 📊 本期出账汇总")
                 df_batch = pd.DataFrame(records_log)
@@ -528,13 +533,12 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                 st.markdown("---")
                 st.markdown("### 📥 按账户单独下载 PDF 文件")
 
-                # 遍历每个账户，单独提供下载按钮
+                # 遍历各个账户，提供专属 PDF 下载
                 for (comp_name, acc_num), item_list in account_pdf_dict.items():
-                    # 提取该账户下的 PDF 字节数组并合并
                     pdf_bytes_list = [item[3] for item in item_list]
                     account_merged_pdf = merge_pdfs(pdf_bytes_list)
                     
-                    st.markdown(f"##### 💳 账户：**{comp_name}** | 账号：`{acc_num}`（共 {len(item_list)} 张支票）")
+                    st.markdown(f"##### 💳 账户：**{comp_name}** | 账号：`{acc_num}`（共 {len(item_list)} 张）")
                     
                     st.download_button(
                         label=f"📄 下载【{comp_name} - {acc_num}】合并 PDF",
@@ -547,10 +551,8 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                 st.markdown("---")
                 st.markdown("##### 📦 更多导出选项")
                 
-                # 总表格 CSV
                 csv_bytes = df_batch.to_csv(index=False).encode('utf-8-sig')
                 
-                # 单张支票 ZIP 打包
                 zip_buf = io.BytesIO()
                 with zipfile.ZipFile(zip_buf, "w") as zf:
                     for (comp_name, acc_num), item_list in account_pdf_dict.items():
