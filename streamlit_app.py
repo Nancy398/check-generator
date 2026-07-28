@@ -323,7 +323,7 @@ if mode == "📝 场景一：单张手动生成":
         )
         amount_words = number_to_words_usd(pay_amount)
 
-        st.info(f"🔤 **英文金额大写预览：**\n\n`{amount_words}`")
+        # st.info(f"🔤 **英文金额大写预览：**\n\n`{amount_words}`")
 
     replacements = {
         "date": pay_date.strftime("%m/%d/%Y"),
@@ -338,8 +338,8 @@ if mode == "📝 场景一：单张手动生成":
     with col2:
         st.subheader("👁️ 支票信息预览")
         st.markdown(f"""
-        > **公司名称**: {p_row['Company']}  
-        > **银行账号**: `{p_row['Account']}`  
+        > **公司名称**: {company_name}  
+        > **银行账号**: `{account}`  
         > **支票编号**: `#{chk_num}`  
         > **开单日期**: {issue_date.strftime("%Y-%m-%d")}  
         > **收款人**: **{payee}**  
