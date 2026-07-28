@@ -456,12 +456,7 @@ elif mode == "👷 场景二：施工队/工人周薪批量生成":
                     hide_index=True
                 )
 
-                # 构建带汇总的 Excel 报告供下载
-                excel_summary_buffer = io.BytesIO()
-                with pd.ExcelWriter(excel_summary_buffer, engine='openpyxl') as writer:
-                    summary_df.to_excel(writer, sheet_name='公司出账汇总', index=False)
-                    df_current_batch.to_excel(writer, sheet_name='支票开具明细', index=False)
-
+               
                 st.markdown("---")
                 st.markdown("### 📥 文件下载区")
 
