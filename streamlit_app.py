@@ -17,7 +17,48 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------------------------
-# 2. Google Sheets & Helper Functions
+# 2. 读取配置文件 (CSV)
+# ------------------------------------------------------------------------------
+def load_projects_config(filepath="projects_config.csv"):
+    """读取项目配置文件"""
+    if os.path.exists(filepath):
+        df = pd.read_csv(filepath)
+    else:
+        # 兜底默认数据并写入 CSV
+        df = pd.DataFrame([
+            {"Project_Name": "项目A-商业中心", "Company": "A建筑有限公司", "Account": "ACC-8888-01", "Next_Check_Number": 1001},
+            {"Project_Name": "项目B-住宅公寓", "Company": "B建设发展公司", "Account": "ACC-6666-02", "Next_Check_Number": 2001},
+            {"Project_Name": "项目C-别墅改造", "Company": "C装饰工程公司", "Account": "ACC-3333-03", "Next_Check_Number": 3001}
+        ])
+        df.to_csv(filepath, index=False, encoding='utf-8-sig')
+    return df
+
+def load_workers_config(filepath="workers_config.csv"):
+    """读取工人配置文件"""
+    if os.path.exists(filepath):
+        df = pd.read_csv(filepath)
+    else:
+        # 兜底默认数据并写入 CSV
+        df = pd.DataFrame([
+            {"Worker_Name": "张三", "Role": "木工组长"},
+            {"Worker_Name": "李四", "Role": "电工精修"},
+            {"Worker_Name": "王五", "Role": "泥水铺砖"},
+            {"Worker_Name": "赵六", "Role": "油漆涂刷"},
+            {"Worker_Name": "钱七", "Role": "杂工小弟"}
+        ])
+        df.to_csv(filepath, index=False, encoding='utf-8-sig')
+    return df
+
+# 加载配置
+df_projects = load_projects_config()
+preset_project_list = df_projects["Project_Name"].tolist()
+
+df_workers = load_workers_config()
+preset_worker_list = df_workers["Worker_Name"].tolist()
+worker_role_map = dict(zip(df_workers["Worker_Name"], df_workers["Role"]))
+
+# ------------------------------------------------------------------------------
+# 3. Google Sheets & Helper Functions
 # ------------------------------------------------------------------------------
 def get_gspread_client():
     """获取 gspread 客户端授权"""
@@ -110,42 +151,17 @@ def save_to_local_csv(records_list, filepath="check_issuance_history.csv"):
         new_df.to_csv(filepath, mode='w', header=True, index=False, encoding='utf-8-sig')
 
 def number_to_words_usd(amount):
-    """将数字金额转化为美金大写英文"""
     dollars = int(amount)
     cents = int(round((amount - dollars) * 100))
     return f"{dollars:,} AND {cents}/100 DOLLARS"
 
 def fill_pdf_placeholders(pdf_bytes, replacements):
-    """占位函数：根据 replacements 填充 PDF"""
     return pdf_bytes
 
 def merge_pdfs(pdf_bytes_list):
-    """占位函数：合并多个 PDF 字节集"""
     if not pdf_bytes_list:
         return b""
     return pdf_bytes_list[0]
-
-# ------------------------------------------------------------------------------
-# 3. 基础预设数据初始化
-# ------------------------------------------------------------------------------
-preset_worker_list = ["张三", "李四", "王五", "赵六", "钱七"]
-worker_role_map = {
-    "张三": "木工组长",
-    "李四": "电工精修",
-    "王五": "泥水铺砖",
-    "赵六": "油漆涂刷",
-    "钱七": "杂工小弟"
-}
-
-def load_project_presets():
-    return pd.DataFrame([
-        {"Project_Name": "项目A-商业中心", "Company": "A建筑有限公司", "Account": "ACC-8888-01", "Next_Check_Number": 1001},
-        {"Project_Name": "项目B-住宅公寓", "Company": "B建设发展公司", "Account": "ACC-6666-02", "Next_Check_Number": 2001},
-        {"Project_Name": "项目C-别墅改造", "Company": "C装饰工程公司", "Account": "ACC-3333-03", "Next_Check_Number": 3001}
-    ])
-
-df_projects = load_project_presets()
-preset_project_list = df_projects["Project_Name"].tolist()
 
 # ------------------------------------------------------------------------------
 # 4. Streamlit 侧边栏与模式切换
@@ -194,11 +210,12 @@ if mode == "📝 场景一：单张/常规即时开单":
             issue_date = st.date_input("开单日期", value=date.today())
 
         # 3. 收款人与金额
-        payee = st.text_input("收款人姓名/单位 (Payee)", value="张三")
+        payee = st.selectbox("收款人姓名/单位 (Payee)", preset_worker_list) if preset_worker_list else st.text_input("收款人姓名/单位 (Payee)")
         amount = st.number_input("金额 $ (Amount)", min_value=0.01, value=1500.00, step=100.0)
         
         # 4. 备注信息
-        memo_text = st.text_input("备注/用途 (Memo)", value="预付材料款/劳务费")
+        default_role = worker_role_map.get(payee, "预付材料款/劳务费")
+        memo_text = st.text_input("备注/用途 (Memo)", value=default_role)
 
         # 自动关联的公司信息显示
         st.info(f"🏢 **出账公司**: {p_row['Company']} | 💳 **出账账号**: `{p_row['Account']}`")
@@ -220,7 +237,6 @@ if mode == "📝 场景一：单张/常规即时开单":
         if st.button("🚀 确认生成并写入云端", type="primary", use_container_width=True):
             full_memo = f"{selected_proj} - {memo_text}" if memo_text else selected_proj
             
-            # 组装数据记录
             record = {
                 "Check Number": int(chk_num),
                 "Issue Date": issue_date.strftime("%Y-%m-%d"),
@@ -232,13 +248,9 @@ if mode == "📝 场景一：单张/常规即时开单":
                 "Memo": full_memo
             }
 
-            # 1. 写入本地 CSV
             save_to_local_csv([record])
-            
-            # 2. 写入 Google Sheets
             gs_success, gs_msg = append_to_google_sheet([record])
 
-            # 3. 准备 PDF 下载
             replacements = {
                 "date": issue_date.strftime("%m/%d/%Y"),
                 "name": payee,
@@ -270,7 +282,7 @@ if mode == "📝 场景一：单张/常规即时开单":
 # ==============================================================================
 elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     st.title("👷 多项目/施工队周薪批量生成")
-    st.caption("自动从 Google Sheets 读取最新编号，匹配工人工种，生成 PDF 并上传云端。")
+    st.caption("从配置文件与 Google Sheets 读取最新编号，匹配工种，生成 PDF 并上传云端。")
 
     pay_date = st.date_input("发薪日期", value=date.today())
 
@@ -345,7 +357,6 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-    # 数据表格展示与在线修改
     if st.session_state.payroll_list:
         st.markdown(f"##### 📋 本期待开支票列表（共 **{len(st.session_state.payroll_list)}** 张）：")
         
@@ -436,11 +447,9 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                 })
 
             if records_log:
-                # 写入本地 CSV 备份与 Google Sheets
                 save_to_local_csv(records_log)
                 gs_success, gs_msg = append_to_google_sheet(records_log)
 
-                # 清空列表
                 st.session_state.payroll_list = []
 
                 st.balloons()
@@ -490,7 +499,6 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 elif mode == "📜 查看历史记录":
     st.title("📜 支票开具历史记录")
     
-    # 尝试读取云端历史数据
     try:
         client = get_gspread_client()
         if client:
