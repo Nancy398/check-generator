@@ -171,11 +171,11 @@ def save_to_local_csv(records_list, filepath="check_issuance_history.csv"):
         new_df.to_csv(filepath, mode='w', header=True, index=False, encoding='utf-8-sig')
 
 def number_to_words_usd(amount):
-    """Convert amount float into traditional check text format."""
+    """把数字金额转换为支票的标准大写英文"""
     try:
         dollars = int(amount)
         cents = int(round((amount - dollars) * 100))
-        words = num2words(dollars, lang='en').title()
+        words = num2words(dollars, lang="en").title()
         return f"{words} and {cents:02d}/100 Dollars"
     except Exception:
         return ""
