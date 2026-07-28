@@ -183,102 +183,100 @@ if mode == "📝 场景一：单张手动生成":
     if not pdf_template_bytes:
         st.stop()
 
-    col1, col2 = st.columns(2)
 
-    with col1:
-        st.subheader("1. 基础信息填报")
+    st.subheader("1. 基础信息填报")
 
-        # ----------------- 模式选择 -----------------
-        biz_mode = st.radio(
-            "选择业务主体 (Business Entity)：",
-            ["🏗️ Moo Construction (施工/项目模式)", "🏠 Moo Housing Inc (房屋租赁/退押金模式)"],
-            horizontal=True,
-        )
+    # ----------------- 模式选择 -----------------
+    biz_mode = st.radio(
+        "选择业务主体 (Business Entity)：",
+        ["🏗️ Moo Construction (施工/项目模式)", "🏠 Moo Housing Inc (房屋租赁/退押金模式)"],
+        horizontal=True,
+    )
 
-        st.markdown("---")
+    st.markdown("---")
 
-        # ----------------- 分支逻辑处理 -----------------
-        if "Construction" in biz_mode:
-            company_name = "Moo Construction Inc"
-            
-            project_options = preset_project_list + ["+ 自定义新项目"]
-            selected_proj = st.selectbox("选择工地/项目 (Project)", project_options)
+    # ----------------- 分支逻辑处理 -----------------
+    if "Construction" in biz_mode:
+        company_name = "Moo Construction Inc"
+        
+        project_options = preset_project_list + ["+ 自定义新项目"]
+        selected_proj = st.selectbox("选择工地/项目 (Project)", project_options)
 
-            if selected_proj != "+ 自定义新项目":
-                p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
-                default_account = p_info["Account"]
-                project_site = selected_proj
-            else:
-                project_site = st.text_input("输入新项目名称", value="New Site")
-                default_account = "ACC-8652"
-
-            account_num = st.text_input("付款账号", value=default_account)
-            default_memo = f"{project_site} - Labor Fee"
-
+        if selected_proj != "+ 自定义新项目":
+            p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
+            default_account = p_info["Account"]
+            project_site = selected_proj
         else:
-            company_name = "Moo Housing Inc"
-            
-            project_options = preset_project_list + ["+ 自定义新项目"]
-            selected_proj = st.selectbox("关联房产/项目 (Project)", project_options)
+            project_site = st.text_input("输入新项目名称", value="New Site")
+            default_account = "ACC-8652"
 
-            if selected_proj != "+ 自定义新项目":
-                project_site = selected_proj
-            else:
-                project_site = st.text_input("输入房产名称/地址", value="Moo Housing Property")
+        account_num = st.text_input("付款账号", value=default_account)
+        default_memo = f"{project_site} - Labor Fee"
 
-            account_choice = st.selectbox(
-                "选择付款账号 (Account)",
-                ["ACC-8652", "ACC-3738", "Other (自定义账号)"]
-            )
+    else:
+        company_name = "Moo Housing Inc"
+        
+        project_options = preset_project_list + ["+ 自定义新项目"]
+        selected_proj = st.selectbox("关联房产/项目 (Project)", project_options)
 
-            if account_choice == "Other (自定义账号)":
-                account_num = st.text_input("输入自定义账号", value="ACC-")
-            else:
-                account_num = account_choice
+        if selected_proj != "+ 自定义新项目":
+            project_site = selected_proj
+        else:
+            project_site = st.text_input("输入房产名称/地址", value="Moo Housing Property")
 
-            default_memo = "Deposit Refund"
-
-        company_display = st.text_input("付款公司名称", value=company_name)
-
-        st.markdown("---")
-
-        payee_name = st.text_input(
-            "收款人 (Payee Name)",
-            value="John Smith",
-        )
-        pay_amount = st.number_input(
-            "金额 $ (Amount)", min_value=0.01, value=1500.00, step=100.0
+        account_choice = st.selectbox(
+            "选择付款账号 (Account)",
+            ["ACC-8652", "ACC-3738", "Other (自定义账号)"]
         )
 
-        c_a, c_b = st.columns(2)
-        with c_a:
-            pay_date = st.date_input("开票日期", value=date.today())
-        with c_b:
-            # === 改为直接自行输入支票号 ===
-            check_num = st.number_input(
-                "支票编号 (Check Number)",
-                min_value=1,
-                value=1001,
-                step=1,
-                help="请直接输入本次要开具的支票号码"
-            )
+        if account_choice == "Other (自定义账号)":
+            account_num = st.text_input("输入自定义账号", value="ACC-")
+        else:
+            account_num = account_choice
 
-        memo_text = st.text_input(
-            "备注 (Memo)", value=default_memo
+        default_memo = "Deposit Refund"
+
+    company_display = st.text_input("付款公司名称", value=company_name)
+
+    st.markdown("---")
+
+    payee_name = st.text_input(
+        "收款人 (Payee Name)",
+        value="John Smith",
+    )
+    pay_amount = st.number_input(
+        "金额 $ (Amount)", min_value=0.01, value=1500.00, step=100.0
+    )
+
+    c_a, c_b = st.columns(2)
+    with c_a:
+        pay_date = st.date_input("开票日期", value=date.today())
+    with c_b:
+        # === 改为直接自行输入支票号 ===
+        check_num = st.number_input(
+            "支票编号 (Check Number)",
+            min_value=1,
+            value=1001,
+            step=1,
+            help="请直接输入本次要开具的支票号码"
         )
-        amount_words = number_to_words_usd(pay_amount)
 
-        st.info(f"🔤 **英文金额大写预览：**\n\n`{amount_words}`")
+    memo_text = st.text_input(
+        "备注 (Memo)", value=default_memo
+    )
+    amount_words = number_to_words_usd(pay_amount)
 
-    replacements = {
-        "date": pay_date.strftime("%m/%d/%Y"),
-        "name": payee_name,
-        "amount": f"{pay_amount:,.2f}",
-        "amount_words": amount_words,
-        "memo": memo_text,
-        "number": str(check_num),
-        "account": account_num,
-    }
+    st.info(f"🔤 **英文金额大写预览：**\n\n`{amount_words}`")
+
+replacements = {
+    "date": pay_date.strftime("%m/%d/%Y"),
+    "name": payee_name,
+    "amount": f"{pay_amount:,.2f}",
+    "amount_words": amount_words,
+    "memo": memo_text,
+    "number": str(check_num),
+    "account": account_num,
+}
 
    
 
