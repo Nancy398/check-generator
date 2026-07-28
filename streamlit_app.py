@@ -234,38 +234,40 @@ if mode == "📝 场景一：单张手动生成":
 # ==============================================================================
 elif mode == "👷 场景二：施工队/工人周薪批量生成":
     st.title("👷 施工队/工人每周发薪")
-    st.caption(
-        "支持多公司/多项目快速发薪，支持上传周薪 Excel 或直接在界面表格中新增工人。"
-    )
+    st.caption("项目联动公司/账号，快捷选择常用工人名单，并自动统计各公司出账总额。")
 
     if not pdf_template_bytes:
         st.error("请先在左侧栏上传 PDF 模板！")
         st.stop()
 
-    # 第一步：基本信息选择
+    # 第一步：基本信息选择 (联动 projects_config.csv)
     st.subheader("1. 付款账户与工地项目")
+
+    project_list = df_projects["Project_Name"].tolist() + ["+ 自定义新项目"]
+
     c1, c2, c3 = st.columns(3)
     with c1:
-        company_opt = st.selectbox(
-            "选择付款公司/账号预设",
-            options=["8652", "3738", "Other"],
-            index=0,
-        )
-        if company_opt in COMPANY_PRESETS:
-            selected_account = COMPANY_PRESETS[company_opt]
+        selected_proj_name = st.selectbox("选择工地/项目 (Project)", project_list)
+
+        if selected_proj_name != "+ 自定义新项目":
+            proj_info = df_projects[df_projects["Project_Name"] == selected_proj_name].iloc[0]
+            selected_company = proj_info["Company"]
+            selected_account = proj_info["Account"]
+            project_site = selected_proj_name
         else:
-            selected_account = st.text_input(
-                "手动输入付款公司账号", value="ACC-9901"
-            )
+            project_site = st.text_input("输入新工地名称", value="New Site")
+            selected_company = st.text_input("输入付款公司名", value="AAA Construction")
+            selected_account = st.text_input("输入账号", value="ACC-8652")
+
     with c2:
-        project_site = st.text_input(
-            "工地/项目名称 (Project Site)", value="123 Main St"
-        )
+        st.text_input("关联公司名 (自动匹配)", value=selected_company, disabled=True)
+        st.text_input("关联账号 (自动匹配)", value=selected_account, disabled=True)
+
     with c3:
         start_check = st.number_input(
             "起始支票编号",
             min_value=1,
-            value=get_next_check_number(),
+            value=get_next_check_number()
         )
 
     st.markdown("---")
@@ -273,35 +275,45 @@ elif mode == "👷 场景二：施工队/工人周薪批量生成":
 
     input_type = st.radio(
         "数据录入模式：",
-        ["手动表格录入/修改", "上传周薪 Excel/CSV 文件"],
-        horizontal=True,
+        ["多选常用工人快速填表", "上传周薪 Excel/CSV 文件"],
+        horizontal=True
     )
 
     df_workers = pd.DataFrame()
 
-    if input_type == "手动表格录入/修改":
-        default_workers = pd.DataFrame(
-            [
-                {
-                    "工人姓名 (Payee)": "John Smith",
-                    "工资金额 (Amount)": 1200.00,
-                    "工作内容 (Memo)": " Framing",
-                },
-                {
-                    "工人姓名 (Payee)": "Carlos Mendez",
-                    "工资金额 (Amount)": 950.50,
-                    "工作内容 (Memo)": " Drywall",
-                },
-            ]
+    if input_type == "多选常用工人快速填表":
+        selected_workers = st.multiselect(
+            "快速勾选本周需要发薪的工人（也可直接在下方表格里手动新增/修改）：",
+            options=preset_worker_list,
+            default=preset_worker_list[:2] if len(preset_worker_list) >= 2 else preset_worker_list
         )
+
+        init_data = []
+        for w in selected_workers:
+            init_data.append({
+                "工人姓名 (Payee)": w,
+                "工资金额 (Amount)": 1000.00,
+                "工作内容 (Memo)": "Weekly Work"
+            })
+
+        df_init = pd.DataFrame(init_data, columns=["工人姓名 (Payee)", "工资金额 (Amount)", "工作内容 (Memo)"])
+
         df_workers = st.data_editor(
-            default_workers, num_rows="dynamic", use_container_width=True
+            df_init,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "工人姓名 (Payee)": st.column_config.SelectboxColumn(
+                    "工人姓名 (Payee)",
+                    options=preset_worker_list,
+                    help="可直接从下拉列表选，也可双击填入新工人",
+                    required=True
+                )
+            }
         )
 
     else:
-        uploaded_payroll = st.file_uploader(
-            "上传工人薪资表 (Excel / CSV)", type=["xlsx", "csv"]
-        )
+        uploaded_payroll = st.file_uploader("上传工人薪资表 (Excel / CSV)", type=["xlsx", "csv"])
         if uploaded_payroll:
             if uploaded_payroll.name.endswith(".csv"):
                 df_payroll_raw = pd.read_csv(uploaded_payroll)
@@ -309,22 +321,16 @@ elif mode == "👷 场景二：施工队/工人周薪批量生成":
                 df_payroll_raw = pd.read_excel(uploaded_payroll)
 
             st.write("上传结果预览（可在线微调）：")
-            df_workers = st.data_editor(
-                df_payroll_raw, num_rows="dynamic", use_container_width=True
-            )
+            df_workers = st.data_editor(df_payroll_raw, num_rows="dynamic", use_container_width=True)
 
     st.markdown("---")
 
     # 第三步：批量生成与导出
     if not df_workers.empty:
-        st.subheader("3. 批量生成支票")
-        pay_date = st.date_input(
-            "发薪日期", value=date.today(), key="payroll_date"
-        )
+        st.subheader("3. 批量生成与汇总开单")
+        pay_date = st.date_input("发薪日期", value=date.today(), key="payroll_date")
 
-        if st.button(
-            "🚀 批量生成施工队支票", type="primary", use_container_width=True
-        ):
+        if st.button("🚀 批量生成施工队支票并统计账单", type="primary", use_container_width=True):
             generated_pdfs = []
             records_log = []
             cur_check = start_check
@@ -340,12 +346,7 @@ elif mode == "👷 场景二：施工队/工人周薪批量生成":
                 if amt <= 0 or not worker_name:
                     continue
 
-                # 自动拼接 Memo：[项目名称] + 工作内容
-                full_memo = (
-                    f"{project_site} - {detail_memo}"
-                    if detail_memo
-                    else project_site
-                )
+                full_memo = f"{project_site} - {detail_memo}" if detail_memo else project_site
 
                 replacements = {
                     "date": pay_date.strftime("%m/%d/%Y"),
@@ -354,61 +355,100 @@ elif mode == "👷 场景二：施工队/工人周薪批量生成":
                     "amount_words": number_to_words_usd(amt),
                     "memo": full_memo,
                     "number": str(cur_check),
-                    "account": selected_account,
+                    "account": selected_account
                 }
 
-                pdf_res = fill_pdf_placeholders(
-                    pdf_template_bytes, replacements
-                )
+                pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
                 generated_pdfs.append((cur_check, worker_name, pdf_res))
 
-                records_log.append(
-                    {
-                        "Check Number": cur_check,
-                        "Issue Date": pay_date.strftime("%Y-%m-%d"),
-                        "Category": f"Contractor Payroll ({project_site})",
-                        "Payee Name": worker_name,
-                        "Amount": amt,
-                        "Account": selected_account,
-                        "Memo": full_memo,
-                    }
-                )
+                records_log.append({
+                    "Check Number": cur_check,
+                    "Issue Date": pay_date.strftime("%Y-%m-%d"),
+                    "Company": selected_company,
+                    "Account": selected_account,
+                    "Project": project_site,
+                    "Payee Name": worker_name,
+                    "Amount": amt,
+                    "Memo": full_memo
+                })
 
                 cur_check += 1
 
             if generated_pdfs:
-                # save_to_history(records_log)
+                save_to_history(records_log)
                 st.balloons()
-                st.success(
-                    f"🎉 成功生成 {len(generated_pdfs)} 张工人发薪支票！支票号: #{start_check} ~ #{cur_check - 1}"
+                st.success(f"🎉 成功生成 {len(generated_pdfs)} 张支票！支票号: #{start_check} ~ #{cur_check - 1}")
+
+                # ==============================================================
+                # 🔥 新增：公司出账统计汇总卡片与表格
+                # ==============================================================
+                st.markdown("### 📊 本期公司出账汇总 (Summary)")
+                
+                df_current_batch = pd.DataFrame(records_log)
+                
+                # 按公司汇总
+                summary_df = df_current_batch.groupby(["Company", "Account"]).agg(
+                    Total_Amount=("Amount", "sum"),
+                    Check_Count=("Check Number", "count")
+                ).reset_index()
+
+                # 展示汇总指标卡片
+                total_payroll_all = summary_df["Total_Amount"].sum()
+                total_checks_all = summary_df["Check_Count"].sum()
+                
+                m1, m2, m3 = st.columns(3)
+                m1.metric("本期发薪总出账", f"${total_payroll_all:,.2f}")
+                m2.metric("开具支票总张数", f"{total_checks_all} 张")
+                m3.metric("涉及公司数量", f"{len(summary_df)} 家")
+
+                # 展示按公司分类的详细统计表
+                st.dataframe(
+                    summary_df.style.format({"Total_Amount": "${:,.2f}"}),
+                    use_container_width=True,
+                    hide_index=True
                 )
 
-                # 提供合并 PDF & ZIP 下载
+                # 构建带汇总的 Excel 报告供下载
+                excel_summary_buffer = io.BytesIO()
+                with pd.ExcelWriter(excel_summary_buffer, engine='openpyxl') as writer:
+                    summary_df.to_excel(writer, sheet_name='公司出账汇总', index=False)
+                    df_current_batch.to_excel(writer, sheet_name='支票开具明细', index=False)
+
+                st.markdown("---")
+                st.markdown("### 📥 文件下载区")
+
                 merged_pdf_bytes = merge_pdfs([p[2] for p in generated_pdfs])
 
-                d_col1, d_col2 = st.columns(2)
+                d_col1, d_col2, d_col3 = st.columns(3)
                 with d_col1:
                     st.download_button(
-                        label="📄 下载【合并打印版 PDF】(推荐给打印机连续打印)",
+                        label="📄 下载【合并 PDF】(打印用)",
                         data=merged_pdf_bytes,
                         file_name=f"Payroll_Checks_{project_site}_{pay_date}.pdf",
                         mime="application/pdf",
                         type="primary",
-                        use_container_width=True,
+                        use_container_width=True
                     )
 
                 with d_col2:
+                    st.download_button(
+                        label="📊 下载【本期出账统计表 Excel】",
+                        data=excel_summary_buffer.getvalue(),
+                        file_name=f"Payroll_Summary_{pay_date}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+
+                with d_col3:
                     zip_buf = io.BytesIO()
                     with zipfile.ZipFile(zip_buf, "w") as zf:
                         for chk, py, pdf_b in generated_pdfs:
-                            zf.writestr(
-                                f"Check_{chk}_{project_site}_{py}.pdf", pdf_b
-                            )
+                            zf.writestr(f"Check_{chk}_{project_site}_{py}.pdf", pdf_b)
 
                     st.download_button(
-                        label="📦 下载单张 ZIP 压缩包",
+                        label="📦 下载单张 ZIP 包",
                         data=zip_buf.getvalue(),
                         file_name=f"Payroll_Checks_ZIP_{project_site}_{pay_date}.zip",
                         mime="application/zip",
-                        use_container_width=True,
+                        use_container_width=True
                     )
