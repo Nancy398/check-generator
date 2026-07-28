@@ -309,7 +309,7 @@ if mode == "📝 场景一：单张手动生成":
         )
 
 # ==============================================================================
-# 场景 2：多项目/施工队周薪批量开单（实现选择工人自动联动 Memo）
+# 场景 2：多项目/施工队周薪批量开单（支持按账户单独生成与导出 PDF）
 # ==============================================================================
 elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     st.title("👷 多项目/施工队周薪批量生成")
@@ -346,12 +346,11 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
 
-    # 定义工人选择改变时的回调函数：自动把 Memo 换成新工人的 Role
+    # 定义工人选择改变时的回调函数
     def update_memo_on_worker_change():
         selected_w = st.session_state.input_w
         st.session_state.input_m = worker_role_map.get(selected_w, "")
 
-    # 初始化 Memo 默认值
     if "input_m" not in st.session_state:
         default_first_worker = preset_worker_list[0] if preset_worker_list else ""
         st.session_state.input_m = worker_role_map.get(default_first_worker, "")
@@ -361,7 +360,6 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     c1, c2, c3, c4, c5 = st.columns([2.5, 2.5, 2, 2.5, 1.5])
 
     with c1:
-        # 添加 on_change 回调
         add_worker = st.selectbox(
             "选择工人 (Payee)", 
             preset_worker_list, 
@@ -373,12 +371,10 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     with c3:
         add_amt = st.number_input("金额 $ (Amount)", min_value=0.01, value=1200.00, step=50.0, key="input_a")
     with c4:
-        # 直接绑定 key="input_m"，由回调函数动态修改它
         add_memo = st.text_input("工作备注 (Memo)", key="input_m")
     with c5:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("➕ 添加", type="primary", use_container_width=True):
-            # 自动计算支票编号
             existing_checks = [
                 row["支票编号 (Check #)"] 
                 for row in st.session_state.payroll_list 
@@ -433,10 +429,11 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-    # ----------------- 3. 批量生成与更新 -----------------
+    # ----------------- 3. 批量生成与按账户拆分导出 -----------------
     if not df_payroll_input.empty:
         if st.button(f"🚀 确认无误，批量生成 {len(df_payroll_input)} 张支票", type="primary", use_container_width=True):
-            generated_pdfs = []
+            # 用字典维护： key 为 (Company, Account)，value 为生成的 PDF 列表
+            account_pdf_dict = {}
             records_log = []
             max_check_used = {}
 
@@ -475,7 +472,12 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                 }
 
                 pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
-                generated_pdfs.append((cur_check, project_name, worker_name, pdf_res))
+                
+                # 按账户存放 PDF
+                acc_key = (company_name, account_num)
+                if acc_key not in account_pdf_dict:
+                    account_pdf_dict[acc_key] = []
+                account_pdf_dict[acc_key].append((cur_check, project_name, worker_name, pdf_res))
 
                 records_log.append({
                     "Check Number": cur_check,
@@ -491,7 +493,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                 if project_name not in max_check_used or cur_check > max_check_used[project_name]:
                     max_check_used[project_name] = cur_check
 
-            if generated_pdfs:
+            if records_log:
                 save_to_history(records_log)
 
                 for p_name, max_num in max_check_used.items():
@@ -501,7 +503,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                 st.session_state.payroll_list = []
 
                 st.balloons()
-                st.success(f"🎉 成功生成 {len(generated_pdfs)} 张支票！")
+                st.success(f"🎉 成功生成 {len(records_log)} 张支票！已自动按【公司 / 银行账户】分类。")
 
                 st.markdown("### 📊 本期出账汇总")
                 df_batch = pd.DataFrame(records_log)
@@ -524,23 +526,39 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                     st.dataframe(summary_project.style.format({"项目总人工费": "${:,.2f}"}), use_container_width=True, hide_index=True)
 
                 st.markdown("---")
-                st.markdown("### 📥 导出与下载")
+                st.markdown("### 📥 按账户单独下载 PDF 文件")
 
-                csv_bytes = df_batch.to_csv(index=False).encode('utf-8-sig')
-                merged_pdf_bytes = merge_pdfs([p[3] for p in generated_pdfs])
-
-                d1, d2, d3 = st.columns(3)
-                with d1:
+                # 遍历每个账户，单独提供下载按钮
+                for (comp_name, acc_num), item_list in account_pdf_dict.items():
+                    # 提取该账户下的 PDF 字节数组并合并
+                    pdf_bytes_list = [item[3] for item in item_list]
+                    account_merged_pdf = merge_pdfs(pdf_bytes_list)
+                    
+                    st.markdown(f"##### 💳 账户：**{comp_name}** | 账号：`{acc_num}`（共 {len(item_list)} 张支票）")
+                    
                     st.download_button(
-                        label="📄 下载【全项目合并 PDF】",
-                        data=merged_pdf_bytes,
-                        file_name=f"Payroll_Checks_AllProjects_{pay_date}.pdf",
+                        label=f"📄 下载【{comp_name} - {acc_num}】合并 PDF",
+                        data=account_merged_pdf,
+                        file_name=f"Checks_{comp_name}_{acc_num}_{pay_date}.pdf",
                         mime="application/pdf",
-                        type="primary",
-                        use_container_width=True
+                        type="primary"
                     )
 
-                with d2:
+                st.markdown("---")
+                st.markdown("##### 📦 更多导出选项")
+                
+                # 总表格 CSV
+                csv_bytes = df_batch.to_csv(index=False).encode('utf-8-sig')
+                
+                # 单张支票 ZIP 打包
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, "w") as zf:
+                    for (comp_name, acc_num), item_list in account_pdf_dict.items():
+                        for chk, proj, py, pdf_b in item_list:
+                            zf.writestr(f"[{acc_num}]_Check_{chk}_[{proj}]_{py}.pdf", pdf_b)
+
+                d1, d2 = st.columns(2)
+                with d1:
                     st.download_button(
                         label="📊 下载【本期出账总账单 CSV】",
                         data=csv_bytes,
@@ -548,17 +566,11 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                         mime="text/csv",
                         use_container_width=True
                     )
-
-                with d3:
-                    zip_buf = io.BytesIO()
-                    with zipfile.ZipFile(zip_buf, "w") as zf:
-                        for chk, proj, py, pdf_b in generated_pdfs:
-                            zf.writestr(f"Check_{chk}_[{proj}]_{py}.pdf", pdf_b)
-
+                with d2:
                     st.download_button(
-                        label="📦 下载单张 ZIP 包",
+                        label="📦 下载所有单张 PDF ZIP 打包",
                         data=zip_buf.getvalue(),
-                        file_name=f"Payroll_Checks_{pay_date}.zip",
+                        file_name=f"Payroll_Checks_SinglePDFs_{pay_date}.zip",
                         mime="application/zip",
                         use_container_width=True
                     )
