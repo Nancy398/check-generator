@@ -345,7 +345,7 @@ if mode == "📝 场景一：单张手动生成":
         > **收款人**: **{payee_name}**  
         > **金额**: **${pay_amount:,.2f}**  
         > **金额大写**: *{amount_words}*  
-        > **Memo**: {selected_proj} - {memo_text}
+        > **Memo**: {memo_text}
         """)
 
         if st.button("🚀 确认生成并推送至 Google Sheets", type="primary", use_container_width=True):
