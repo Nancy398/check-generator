@@ -75,38 +75,43 @@ def get_gspread_client():
         return None
     return gspread.authorize(creds)
 
-def fetch_next_check_numbers_from_gs(default_projects_df):
+def fetch_next_check_numbers_from_gs(default_projects_df, default_start_number=1001):
     """
-    从 Google Sheets 读取历史记录，统计各项目最大 Check Number 并加 1 作为下一个起始号
+    从 Google Sheets 读取历史记录：
+    1. 如果项目有开单记录 -> 使用该项目最大 Check Number + 1
+    2. 如果项目无开单记录或联网失败 -> 使用全局默认起始号 (如 1001)
     """
     next_numbers = {}
+    
+    # 获取项目列表
+    project_names = default_projects_df["Project_Name"].tolist() if "Project_Name" in default_projects_df.columns else []
+
     try:
         client = get_gspread_client()
-        if not client:
-            return {row["Project_Name"]: int(row["Next_Check_Number"]) for _, row in default_projects_df.iterrows()}
-
-        sheet_name = st.secrets.get("SPREADSHEET_NAME", "Check Issuance History")
-        sheet = client.open(sheet_name).worksheet("Sheet1")
-        
-        records = sheet.get_all_records()
-        if records:
-            df_gs = pd.DataFrame(records)
-            if "Project" in df_gs.columns and "Check Number" in df_gs.columns:
-                df_gs["Check Number"] = pd.to_numeric(df_gs["Check Number"], errors="coerce")
-                max_checks = df_gs.groupby("Project")["Check Number"].max().to_dict()
-                
-                for _, row in default_projects_df.iterrows():
-                    p_name = row["Project_Name"]
-                    default_num = int(row["Next_Check_Number"])
-                    if p_name in max_checks and pd.notnull(max_checks[p_name]):
-                        next_numbers[p_name] = int(max_checks[p_name]) + 1
-                    else:
-                        next_numbers[p_name] = default_num
-                return next_numbers
+        if client:
+            sheet_name = st.secrets.get("SPREADSHEET_NAME", "Check Issuance History")
+            sheet = client.open(sheet_name).worksheet("Sheet1")
+            records = sheet.get_all_records()
+            
+            if records:
+                df_gs = pd.DataFrame(records)
+                if "Project" in df_gs.columns and "Check Number" in df_gs.columns:
+                    # 转为数字格式
+                    df_gs["Check Number"] = pd.to_numeric(df_gs["Check Number"], errors="coerce")
+                    max_checks = df_gs.groupby("Project")["Check Number"].max().to_dict()
+                    
+                    for p_name in project_names:
+                        if p_name in max_checks and pd.notnull(max_checks[p_name]):
+                            next_numbers[p_name] = int(max_checks[p_name]) + 1
+                        else:
+                            next_numbers[p_name] = default_start_number
+                    return next_numbers
     except Exception as e:
         st.sidebar.warning(f"⚠️ 云端获取最新支票号失败: {str(e)}")
 
-    return {row["Project_Name"]: int(row["Next_Check_Number"]) for _, row in default_projects_df.iterrows()}
+    # 兜底：如果连不上云端或未获取到，统一返回默认初始号
+    return {p_name: default_start_number for p_name in project_names}
+
 
 def append_to_google_sheet(records_list):
     """将生成的支票记录追加写入 Google Sheets (Sheet1)"""
