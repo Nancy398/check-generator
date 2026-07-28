@@ -340,11 +340,11 @@ if mode == "📝 场景一：单张手动生成":
         st.markdown(f"""
         > **公司名称**: {company_name}  
         > **银行账号**: `{account_num}`  
-        > **支票编号**: `#{chk_num}`  
-        > **开单日期**: {issue_date.strftime("%Y-%m-%d")}  
-        > **收款人**: **{payee}**  
-        > **金额**: **${amount:,.2f}**  
-        > **金额大写**: *{number_to_words_usd(amount)}*  
+        > **支票编号**: `#{check_num}`  
+        > **开单日期**: {pay_date.strftime("%Y-%m-%d")}  
+        > **收款人**: **{payee_name}**  
+        > **金额**: **${pay_amount:,.2f}**  
+        > **金额大写**: *{amount_words}*  
         > **Memo**: {selected_proj} - {memo_text}
         """)
 
