@@ -319,11 +319,11 @@ if mode == "📝 场景一：单张手动生成":
             )
 
 # ==============================================================================
-# 场景 2：多项目/施工队周薪批量开单（100% 解决只生成第一行 Bug）
+# 场景 2：多项目/施工队周薪批量开单（实现选择工人自动联动 Memo）
 # ==============================================================================
 elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     st.title("👷 多项目/施工队周薪批量生成")
-    st.caption("先确认项目起始号，通过快捷添加栏录入，系统将自动递增编号并带出工种。")
+    st.caption("先确认项目起始号，通过快捷添加栏录入，系统将自动递增编号并匹配工种。")
 
     if not pdf_template_bytes:
         st.stop()
@@ -350,30 +350,45 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-    # ----------------- 2. 初始化发薪数据列表 -----------------
+    # ----------------- 2. 初始化发薪数据列表与输入框状态 -----------------
     st.subheader("2. 录入发薪明细")
 
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
+
+    # 定义工人选择改变时的回调函数：自动把 Memo 换成新工人的 Role
+    def update_memo_on_worker_change():
+        selected_w = st.session_state.input_w
+        st.session_state.input_m = worker_role_map.get(selected_w, "")
+
+    # 初始化 Memo 默认值
+    if "input_m" not in st.session_state:
+        default_first_worker = preset_worker_list[0] if preset_worker_list else ""
+        st.session_state.input_m = worker_role_map.get(default_first_worker, "")
 
     # --- 快捷添加面板 ---
     st.markdown("##### ➕ 添加发薪人员")
     c1, c2, c3, c4, c5 = st.columns([2.5, 2.5, 2, 2.5, 1.5])
 
     with c1:
-        add_worker = st.selectbox("选择工人 (Payee)", preset_worker_list, key="input_w")
+        # 添加 on_change 回调
+        add_worker = st.selectbox(
+            "选择工人 (Payee)", 
+            preset_worker_list, 
+            key="input_w",
+            on_change=update_memo_on_worker_change
+        )
     with c2:
         add_proj = st.selectbox("所属项目 (Project)", preset_project_list, key="input_p")
     with c3:
         add_amt = st.number_input("金额 $ (Amount)", min_value=0.01, value=1200.00, step=50.0, key="input_a")
     with c4:
-        # 自动获取 Default_Role
-        default_role = worker_role_map.get(add_worker, "")
-        add_memo = st.text_input("工作备注 (Memo)", value=default_role, key="input_m")
+        # 直接绑定 key="input_m"，由回调函数动态修改它
+        add_memo = st.text_input("工作备注 (Memo)", key="input_m")
     with c5:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("➕ 添加", type="primary", use_container_width=True):
-            # 计算当前项目推算到的最新支票号
+            # 自动计算支票编号
             existing_checks = [
                 row["支票编号 (Check #)"] 
                 for row in st.session_state.payroll_list 
@@ -385,7 +400,6 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
             else:
                 next_chk = proj_start_nums.get(add_proj, 1001)
 
-            # 压入数组，彻底固化状态
             st.session_state.payroll_list.append({
                 "工人姓名 (Payee)": add_worker,
                 "所属项目 (Project)": add_proj,
@@ -403,7 +417,6 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
         
         df_current = pd.DataFrame(st.session_state.payroll_list)
 
-        # 展示可编辑表格
         edited_df = st.data_editor(
             df_current,
             num_rows="dynamic",
@@ -417,7 +430,6 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
             }
         )
 
-        # 同步回 session_state 保证编辑有效
         st.session_state.payroll_list = edited_df.to_dict(orient="records")
 
         if st.button("🗑️ 清空列表重新录入", type="secondary"):
@@ -440,7 +452,6 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
             proj_map = df_projects.set_index("Project_Name").to_dict(orient="index")
 
-            # 遍历列表中所有的行
             for idx, row in df_payroll_input.iterrows():
                 worker_name = str(row.get("工人姓名 (Payee)", "")).strip()
                 project_name = str(row.get("所属项目 (Project)", "")).strip()
@@ -497,7 +508,6 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                     df_projects.loc[df_projects["Project_Name"] == p_name, "Next_Check_Number"] = max_num + 1
                 save_project_presets(df_projects)
 
-                # 生成完毕后清空
                 st.session_state.payroll_list = []
 
                 st.balloons()
