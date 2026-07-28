@@ -13,6 +13,7 @@ dependencies = [
     "pypandoc",
     "datetime",
     "fitz",
+    "openpyxl",
 ]
 
 [tool.uv]
