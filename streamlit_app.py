@@ -61,19 +61,34 @@ worker_role_map = dict(zip(df_workers["Worker_Name"], df_workers["Default_Role"]
 # 3. Google Sheets & Helper Functions
 # ------------------------------------------------------------------------------
 def get_gspread_client():
-    """获取 gspread 客户端授权"""
+    """获取 gspread 客户端授权（增强兼容版）"""
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
+    
+    # 方式 1：优先读取 Streamlit Secrets (secrets.toml)
     if "gcp_service_account" in st.secrets:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    elif os.path.exists("service_account.json"):
-        creds = Credentials.from_service_account_file("service_account.json", scopes=scopes)
-    else:
-        return None
-    return gspread.authorize(creds)
+        try:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            # 处理 private_key 中的转义换行符
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+            return gspread.authorize(creds)
+        except Exception as e:
+            st.error(f"❌ 解析 st.secrets['gcp_service_account'] 失败: {e}")
+
+    # 方式 2：读取本地 service_account.json 文件
+    json_path = "service_account.json"
+    if os.path.exists(json_path):
+        try:
+            creds = Credentials.from_service_account_file(json_path, scopes=scopes)
+            return gspread.authorize(creds)
+        except Exception as e:
+            st.error(f"❌ 读取本地 {json_path} 失败: {e}")
+
+    return None
 
 def fetch_next_check_numbers_from_gs(default_projects_df, default_start_number=1001):
     """
