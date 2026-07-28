@@ -339,7 +339,7 @@ if mode == "📝 场景一：单张手动生成":
         st.subheader("👁️ 支票信息预览")
         st.markdown(f"""
         > **公司名称**: {company_name}  
-        > **银行账号**: `{account}`  
+        > **银行账号**: `{account_num}`  
         > **支票编号**: `#{chk_num}`  
         > **开单日期**: {issue_date.strftime("%Y-%m-%d")}  
         > **收款人**: **{payee}**  
