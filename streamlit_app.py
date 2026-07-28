@@ -55,7 +55,7 @@ preset_project_list = df_projects["Project_Name"].tolist()
 
 df_workers = load_workers_config()
 preset_worker_list = df_workers["Worker_Name"].tolist()
-worker_role_map = dict(zip(df_workers["Worker_Name"], df_workers["Role"]))
+worker_role_map = dict(zip(df_workers["Worker_Name"], df_workers["Default_Role"]))
 
 # ------------------------------------------------------------------------------
 # 3. Google Sheets & Helper Functions
