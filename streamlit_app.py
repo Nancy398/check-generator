@@ -309,7 +309,7 @@ if mode == "📝 场景一：单张手动生成":
         )
 
 # ==============================================================================
-# 场景 2：多项目/施工队周薪批量开单（按账户拆分 PDF + 自动写入 History）
+# 场景 2：多项目/施工队周薪批量开单（自动追加存入 check_issuance_history.csv）
 # ==============================================================================
 elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     st.title("👷 多项目/施工队周薪批量生成")
@@ -346,7 +346,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
 
-    # 定义工人选择改变时的回调函数：动态更替 Memo
+    # 选择工人时动态更新 Memo 内容
     def update_memo_on_worker_change():
         selected_w = st.session_state.input_w
         st.session_state.input_m = worker_role_map.get(selected_w, "")
@@ -429,12 +429,10 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-    # ----------------- 3. 批量生成、记录 History 与按账户拆分导出 -----------------
+    # ----------------- 3. 批量生成、记录 CSV 与按账户拆分导出 -----------------
     if not df_payroll_input.empty:
         if st.button(f"🚀 确认无误，批量生成 {len(df_payroll_input)} 张支票", type="primary", use_container_width=True):
-            # 存储按账户分组的 PDF
             account_pdf_dict = {}
-            # 专门用于存入 history.csv / 数据库的数据日志列表
             records_log = []
             max_check_used = {}
 
@@ -474,13 +472,13 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
                 pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
                 
-                # 按账户分类存入列表
+                # 分账户归类 PDF
                 acc_key = (company_name, account_num)
                 if acc_key not in account_pdf_dict:
                     account_pdf_dict[acc_key] = []
                 account_pdf_dict[acc_key].append((cur_check, project_name, worker_name, pdf_res))
 
-                # 📌 写入 History 的标准明细结构
+                # 📌 准备写入 check_issuance_history.csv 的明细数据
                 records_log.append({
                     "Check Number": cur_check,
                     "Issue Date": pay_date.strftime("%Y-%m-%d"),
@@ -496,19 +494,19 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                     max_check_used[project_name] = cur_check
 
             if records_log:
-                # 1. 写入历史开单记录数据（调用你的通用保存历史函数）
+                # 1. 精准追加写入 check_issuance_history.csv
                 save_to_history(records_log)
 
-                # 2. 更新项目中每个账户/工地的下一次起始支票号
+                # 2. 更新项目中 Next_Check_Number 并保存项目配置
                 for p_name, max_num in max_check_used.items():
                     df_projects.loc[df_projects["Project_Name"] == p_name, "Next_Check_Number"] = max_num + 1
                 save_project_presets(df_projects)
 
-                # 3. 清空临时面板
+                # 3. 清空面板列表
                 st.session_state.payroll_list = []
 
                 st.balloons()
-                st.success(f"🎉 成功生成 {len(records_log)} 张支票！数据已自动归档至历史记录（History）。")
+                st.success(f"🎉 成功生成 {len(records_log)} 张支票！数据已自动追加保存至 `check_issuance_history.csv`。")
 
                 st.markdown("### 📊 本期出账汇总")
                 df_batch = pd.DataFrame(records_log)
@@ -533,7 +531,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                 st.markdown("---")
                 st.markdown("### 📥 按账户单独下载 PDF 文件")
 
-                # 遍历各个账户，提供专属 PDF 下载
+                # 按公司/账号分块下载合并后的 PDF
                 for (comp_name, acc_num), item_list in account_pdf_dict.items():
                     pdf_bytes_list = [item[3] for item in item_list]
                     account_merged_pdf = merge_pdfs(pdf_bytes_list)
