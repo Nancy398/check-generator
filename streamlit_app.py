@@ -319,11 +319,11 @@ if mode == "📝 场景一：单张手动生成":
             )
 
 # ==============================================================================
-# 场景 2：多项目/施工队周薪批量开单（彻底修复新增行消失 Bug）
+# 场景 2：多项目/施工队周薪批量开单（全新：稳定快捷录入版）
 # ==============================================================================
 elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     st.title("👷 多项目/施工队周薪批量生成")
-    st.caption("录入发薪明细，系统可根据各项目配置及工人默认岗位自动补全信息。")
+    st.caption("先确认项目起始号，再通过快捷面板录入，系统将自动递增支票号并匹配工种。")
 
     if not pdf_template_bytes:
         st.stop()
@@ -350,76 +350,81 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-    # ----------------- 2. 录入发薪明细 -----------------
+    # ----------------- 2. 初始化发薪数据列表 -----------------
     st.subheader("2. 录入发薪明细")
 
-    first_worker = preset_worker_list[0] if preset_worker_list else ""
-    first_project = preset_project_list[0] if preset_project_list else ""
-    first_role = worker_role_map.get(first_worker, "")
-    first_check = proj_start_nums.get(first_project, 1001)
+    if "payroll_list" not in st.session_state:
+        st.session_state.payroll_list = []
 
-    # 初始默认只有 1 行数据
-    init_df = pd.DataFrame([
-        {
-            "工人姓名 (Payee)": first_worker,
-            "所属项目 (Project)": first_project,
-            "支票编号 (Check #)": int(first_check),
-            "金额 $ (Amount)": 1200.00,
-            "工作备注 (Memo)": first_role
-        }
-    ])
+    # --- 快捷添加面板 ---
+    st.markdown("##### ➕ 快速添加一条发薪记录")
+    c1, c2, c3, c4, c5 = st.columns([2.5, 2.5, 2, 2.5, 1.5])
 
-    # 交互式可编辑表格（直接使用原生态数据，不强行覆盖 session_state，数据再多也不会消失）
-    df_payroll_input = st.data_editor(
-        init_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="payroll_editor_main",
-        column_config={
-            "工人姓名 (Payee)": st.column_config.SelectboxColumn(
-                "工人姓名 (Payee)",
-                options=preset_worker_list,
-            ),
-            "所属项目 (Project)": st.column_config.SelectboxColumn(
-                "所属项目 (Project)",
-                options=preset_project_list,
-                required=True,
-            ),
-            "支票编号 (Check #)": st.column_config.NumberColumn(
-                "支票编号 (Check #)",
-                format="%d"
-            ),
-            "金额 $ (Amount)": st.column_config.NumberColumn(
-                "金额 $ (Amount)",
-                format="$%.2f"
-            )
-        },
-    )
-
-    # 快捷补全工具框（展开式，不干扰主表格的数据状态）
-    with st.expander("💡 点击此处：对已录入的表格一键【自动编排支票号 & 填充 Role】"):
-        if st.button("🚀 重新推算编号并补全 Memo", type="secondary"):
-            df_temp = df_payroll_input.copy()
-            project_counters = proj_start_nums.copy()
-
-            for idx in df_temp.index:
-                w_name = df_temp.loc[idx, "工人姓名 (Payee)"]
-                p_name = df_temp.loc[idx, "所属项目 (Project)"]
-
-                # 自动带出岗位
-                if w_name in worker_role_map and not df_temp.loc[idx, "工作备注 (Memo)"]:
-                    df_temp.loc[idx, "工作备注 (Memo)"] = worker_role_map[w_name]
-
-                # 自动递增支票号
-                if p_name in project_counters:
-                    df_temp.loc[idx, "支票编号 (Check #)"] = project_counters[p_name]
-                    project_counters[p_name] += 1
-
-            # 清理 widget key 缓存以确保数据安全更新
-            if "payroll_editor_main" in st.session_state:
-                del st.session_state["payroll_editor_main"]
+    with c1:
+        add_worker = st.selectbox("选择工人 (Payee)", preset_worker_list, key="input_w")
+    with c2:
+        add_proj = st.selectbox("所属项目 (Project)", preset_project_list, key="input_p")
+    with c3:
+        add_amt = st.number_input("金额 $ (Amount)", min_value=0.01, value=1200.00, step=50.0, key="input_a")
+    with c4:
+        # 默认带出该工人的 Default_Role
+        default_role = worker_role_map.get(add_worker, "")
+        add_memo = st.text_input("工作备注 (Memo)", value=default_role, key="input_m")
+    with c5:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("➕ 添加", type="primary", use_container_width=True):
+            # 1. 自动计算该项目当前排到的支票号
+            existing_checks = [
+                row["支票编号 (Check #)"] 
+                for row in st.session_state.payroll_list 
+                if row["所属项目 (Project)"] == add_proj
+            ]
             
+            if existing_checks:
+                next_chk = max(existing_checks) + 1
+            else:
+                next_chk = proj_start_nums.get(add_proj, 1001)
+
+            # 2. 追加记录
+            st.session_state.payroll_list.append({
+                "工人姓名 (Payee)": add_worker,
+                "所属项目 (Project)": add_proj,
+                "支票编号 (Check #)": int(next_chk),
+                "金额 $ (Amount)": add_amt,
+                "工作备注 (Memo)": add_memo
+            })
             st.rerun()
+
+    st.markdown("---")
+
+    # --- 数据展示与微调表格 ---
+    if st.session_state.payroll_list:
+        st.markdown("##### 📋 本期发薪清单预览（如需修改编号/金额，可直接在下方表格修改）：")
+        
+        df_current = pd.DataFrame(st.session_state.payroll_list)
+
+        edited_df = st.data_editor(
+            df_current,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="payroll_table_editor",
+            column_config={
+                "工人姓名 (Payee)": st.column_config.SelectboxColumn("工人姓名 (Payee)", options=preset_worker_list),
+                "所属项目 (Project)": st.column_config.SelectboxColumn("所属项目 (Project)", options=preset_project_list),
+                "支票编号 (Check #)": st.column_config.NumberColumn("支票编号 (Check #)", format="%d"),
+                "金额 $ (Amount)": st.column_config.NumberColumn("金额 $ (Amount)", format="$%.2f")
+            }
+        )
+
+        # 清空按钮
+        if st.button("🗑️ 清空列表重新录入", type="secondary"):
+            st.session_state.payroll_list = []
+            st.rerun()
+
+        df_payroll_input = edited_df
+    else:
+        st.info("💡 列表中暂无数据，请在上方选择工人与项目后点击 **【➕ 添加】** 按钮。")
+        df_payroll_input = pd.DataFrame()
 
     st.markdown("---")
 
@@ -487,6 +492,9 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                 for p_name, max_num in max_check_used.items():
                     df_projects.loc[df_projects["Project_Name"] == p_name, "Next_Check_Number"] = max_num + 1
                 save_project_presets(df_projects)
+
+                # 生成完毕后清空缓存
+                st.session_state.payroll_list = []
 
                 st.balloons()
                 st.success(f"🎉 成功生成 {len(generated_pdfs)} 张支票！")
