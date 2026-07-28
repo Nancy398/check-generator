@@ -280,43 +280,35 @@ if mode == "📝 场景一：单张手动生成":
         "account": account_num,
     }
 
-    with col2:
-        st.subheader("2. 实时生成与预览")
-        filled_pdf = fill_pdf_placeholders(pdf_template_bytes, replacements)
+   
 
-        base64_pdf = base64.b64encode(filled_pdf).decode("utf-8")
-        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="480" type="application/pdf"></iframe>'
-        st.markdown(pdf_display, unsafe_allow_html=True)
+    if st.button("🚀 确认生成并记录台账", type="primary", use_container_width=True):
+        record = [
+            {
+                "Check Number": check_num,
+                "Issue Date": pay_date.strftime("%Y-%m-%d"),
+                "Company": company_display,
+                "Account": account_num,
+                "Project": project_site,
+                "Payee Name": payee_name,
+                "Amount": pay_amount,
+                "Memo": memo_text,
+            }
+        ]
+        save_to_history(record)
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.balloons()
+        st.success(
+            f"🎉 支票 #{check_num} 已成功生成并写入历史台账！"
+        )
 
-        if st.button("🚀 确认生成并记录台账", type="primary", use_container_width=True):
-            record = [
-                {
-                    "Check Number": check_num,
-                    "Issue Date": pay_date.strftime("%Y-%m-%d"),
-                    "Company": company_display,
-                    "Account": account_num,
-                    "Project": project_site,
-                    "Payee Name": payee_name,
-                    "Amount": pay_amount,
-                    "Memo": memo_text,
-                }
-            ]
-            save_to_history(record)
-
-            st.balloons()
-            st.success(
-                f"🎉 支票 #{check_num} 已成功生成并写入历史台账！"
-            )
-
-            st.download_button(
-                label=f"📥 下载支票 PDF (#{check_num})",
-                data=filled_pdf,
-                file_name=f"Check_{check_num}_{payee_name}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
+        st.download_button(
+            label=f"📥 下载支票 PDF (#{check_num})",
+            data=filled_pdf,
+            file_name=f"Check_{check_num}_{payee_name}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
 
 # ==============================================================================
 # 场景 2：多项目/施工队周薪批量开单（实现选择工人自动联动 Memo）
