@@ -268,15 +268,15 @@ if mode == "📝 场景一：单张手动生成":
 
     st.info(f"🔤 **英文金额大写预览：**\n\n`{amount_words}`")
 
-replacements = {
-    "date": pay_date.strftime("%m/%d/%Y"),
-    "name": payee_name,
-    "amount": f"{pay_amount:,.2f}",
-    "amount_words": amount_words,
-    "memo": memo_text,
-    "number": str(check_num),
-    "account": account_num,
-}
+    replacements = {
+        "date": pay_date.strftime("%m/%d/%Y"),
+        "name": payee_name,
+        "amount": f"{pay_amount:,.2f}",
+        "amount_words": amount_words,
+        "memo": memo_text,
+        "number": str(check_num),
+        "account": account_num,
+    }
 
    
 
