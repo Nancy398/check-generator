@@ -15,12 +15,60 @@ st.set_page_config(
 # ----------------- 配置文件与常量 -----------------
 DEFAULT_TEMPLATE_PATH = "check_run.pdf"
 LOG_FILE = "check_issuance_history.xlsx"
+PROJECTS_CSV = "projects_config.csv"
+WORKERS_CSV = "workers_config.csv"
 
-# 预设公司与账号映射
-COMPANY_PRESETS = {
-    "8652": "ACC-8652",
-    "3738": "ACC-3738",
-}
+
+# ----------------- 初始化/读取配置文件 -----------------
+def load_project_presets():
+    """读取或创建公司与工地项目对应表"""
+    if not os.path.exists(PROJECTS_CSV):
+        # 初始示范数据
+        df_default = pd.DataFrame(
+            [
+                {
+                    "Project_Name": "123 Main St",
+                    "Company": "AAA Construction Inc",
+                    "Account": "ACC-8652",
+                },
+                {
+                    "Project_Name": "456 Oak Ave",
+                    "Company": "BBB Development LLC",
+                    "Account": "ACC-3738",
+                },
+                {
+                    "Project_Name": "789 Pine Rd",
+                    "Company": "CCC Management Group",
+                    "Account": "ACC-9901",
+                },
+            ]
+        )
+        df_default.to_csv(PROJECTS_CSV, index=False)
+
+    return pd.read_csv(PROJECTS_CSV)
+
+
+def load_worker_presets():
+    """读取或创建常用工人列表"""
+    if not os.path.exists(WORKERS_CSV):
+        # 初始示范数据
+        df_default = pd.DataFrame(
+            [
+                {"Worker_Name": "John Smith", "Default_Role": "Framing"},
+                {"Worker_Name": "Carlos Mendez", "Default_Role": "Drywall"},
+                {"Worker_Name": "David Lee", "Default_Role": "Electrical"},
+                {"Worker_Name": "Jose Rodriguez", "Default_Role": "Plumbing"},
+            ]
+        )
+        df_default.to_csv(WORKERS_CSV, index=False)
+
+    df_workers = pd.read_csv(WORKERS_CSV)
+    return df_workers["Worker_Name"].dropna().tolist()
+
+
+# 加载预设配置
+df_projects = load_project_presets()
+preset_worker_list = load_worker_presets()
 
 
 # ----------------- 核心工具函数 -----------------
