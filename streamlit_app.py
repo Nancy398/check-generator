@@ -19,75 +19,41 @@ DEFAULT_TEMPLATE_PATH = "check_run.pdf"
 PROJECTS_CSV = "projects_config.csv"
 WORKERS_CSV = "workers_config.csv"
 
-# ----------------- Google Sheets 授权与读写核心逻辑 -----------------
-def get_gspread_client():
-    """获取 gspread 客户端授权（兼容 Streamlit Secrets 和 本地 json 文件）"""
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
+GS_SPREADSHEET_NAME = "Check Issuance History"  # Google 表格的名字
+GS_WORKSHEET_NAME = "Sheet1"                  # 工作表的名字
+
+# ----------------- 1. 获取 Authorization 客户端 -----------------
+def get_gc_client():
+    scope = [
+        "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive"
     ]
-    
-    # 方式 1：优先读取 Streamlit Secrets (secrets.toml)
-    if "gcp_service_account" in st.secrets:
-        try:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            if "private_key" in creds_dict:
-                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-            creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-            return gspread.authorize(creds)
-        except Exception as e:
-            st.sidebar.error(f"❌ 解析 Secrets 失败: {e}")
-
-    # 方式 2：读取本地 service_account.json 文件
-    json_path = "service_account.json"
-    if os.path.exists(json_path):
-        try:
-            creds = Credentials.from_service_account_file(json_path, scopes=scopes)
-            return gspread.authorize(creds)
-        except Exception as e:
-            st.sidebar.error(f"❌ 读取本地 service_account.json 失败: {e}")
-
-    return None
-
-def fetch_next_check_numbers_from_gs(df_p_list, default_start_number=1001):
-    """从 Google Sheets 历史记录计算各项目最新支票号 (最大值 + 1)"""
-    next_numbers = {}
-    client = get_gspread_client()
-    
-    if client:
-        try:
-            sheet_name = st.secrets.get("SPREADSHEET_NAME", "Check Issuance History")
-            sheet = client.open(sheet_name).worksheet("Sheet1")
-            records = sheet.get_all_records()
-            if records:
-                df_gs = pd.DataFrame(records)
-                if "Project" in df_gs.columns and "Check Number" in df_gs.columns:
-                    df_gs["Check Number"] = pd.to_numeric(df_gs["Check Number"], errors="coerce")
-                    max_checks = df_gs.groupby("Project")["Check Number"].max().to_dict()
-                    for p_name in df_p_list:
-                        if p_name in max_checks and pd.notnull(max_checks[p_name]):
-                            next_numbers[p_name] = int(max_checks[p_name]) + 1
-        except Exception as e:
-            st.sidebar.warning(f"⚠️ 从 Google Sheets 推算最新支票号失败: {e}")
-
-    # 兜底：无记录或连接失败时默认初始号
-    for p_name in df_p_list:
-        if p_name not in next_numbers:
-            next_numbers[p_name] = default_start_number
-            
-    return next_numbers
-
-def save_to_history(records):
-    """【仅保存至 Google Sheets】追加写入记录"""
-    client = get_gspread_client()
-    if not client:
-        st.error("❌ 未检测到 Google Service Account 授权凭证，数据未能保存！请检查凭证配置。")
-        return False
-    try:
-        sheet_name = st.secrets.get("SPREADSHEET_NAME", "Check Issuance History")
-        sheet = client.open(sheet_name).worksheet("Sheet1")
+    creds_dict = dict(st.secrets["GOOGLE_APPLICATION_CREDENTIALS"])
+    if "private_key" in creds_dict:
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
-        # 转换数据格式为二维列表按列顺序写入
+    credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
+    return gspread.authorize(credentials)
+
+# ----------------- 2. 读取 Google Sheets (你的原始写法) -----------------
+def read_file(name, sheet):
+    gc = get_gc_client()
+    worksheet = gc.open(name).worksheet(sheet)
+    rows = worksheet.get_all_values()
+    if not rows or len(rows) <= 1:
+        return pd.DataFrame()
+    df = pd.DataFrame.from_records(rows)
+    df = pd.DataFrame(df.values[1:], columns=df.iloc[0])
+    return df
+
+# ----------------- 3. 保存写入 Google Sheets -----------------
+def save_to_history(records):
+    """把生成的支票记录直接追加保存到 Google Sheets 中"""
+    try:
+        gc = get_gc_client()
+        worksheet = gc.open(GS_SPREADSHEET_NAME).worksheet(GS_WORKSHEET_NAME)
+        
+        # 将记录字典转换为对应的表格行数据列表
         rows_to_append = []
         for r in records:
             rows_to_append.append([
@@ -100,11 +66,35 @@ def save_to_history(records):
                 r["Amount"],
                 r["Memo"]
             ])
-        sheet.append_rows(rows_to_append)
+        # 使用 gspread 的 append_rows 实现云端保存
+        worksheet.append_rows(rows_to_append)
         return True
     except Exception as e:
-        st.error(f"❌ 数据写入 Google Sheets 失败: {e}")
+        st.error(f"❌ 数据保存至 Google Sheets 失败: {e}")
         return False
+
+# ----------------- 4. 读取云端表格并计算最新可用支票号 -----------------
+def fetch_next_check_numbers_from_gs(df_p_list, default_start_number=1001):
+    """利用你的 read_file 读取数据，计算各个项目最新的 Check Number (+1)"""
+    next_numbers = {}
+    try:
+        df_gs = read_file(GS_SPREADSHEET_NAME, GS_WORKSHEET_NAME)
+        if not df_gs.empty and "Project" in df_gs.columns and "Check Number" in df_gs.columns:
+            df_gs["Check Number"] = pd.to_numeric(df_gs["Check Number"], errors="coerce")
+            max_checks = df_gs.groupby("Project")["Check Number"].max().to_dict()
+            
+            for p_name in df_p_list:
+                if p_name in max_checks and pd.notnull(max_checks[p_name]):
+                    next_numbers[p_name] = int(max_checks[p_name]) + 1
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ 读取云端历史推算支票号失败，将使用默认起始号。({e})")
+
+    # 兜底默认值
+    for p_name in df_p_list:
+        if p_name not in next_numbers:
+            next_numbers[p_name] = default_start_number
+            
+    return next_numbers
 
 # ----------------- 初始化/读取基础预设文件 -----------------
 def load_project_presets():
