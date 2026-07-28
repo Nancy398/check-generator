@@ -14,7 +14,7 @@ st.set_page_config(
 
 # ----------------- 配置文件与常量 -----------------
 DEFAULT_TEMPLATE_PATH = "check_run.pdf"
-LOG_FILE = "check_issuance_history.xlsx"
+LOG_FILE = "check_issuance_history.csv"
 PROJECTS_CSV = "projects_config.csv"
 WORKERS_CSV = "workers_config.csv"
 
@@ -126,10 +126,10 @@ def display_pdf_preview(pdf_bytes):
 
 
 def get_next_check_number():
-    """读取历史台账，自动推荐下一个支票号"""
+    """读取历史台账，自动推荐下一个支票号 (CSV 版)"""
     if os.path.exists(LOG_FILE):
         try:
-            df_log = pd.read_excel(LOG_FILE)
+            df_log = pd.read_csv(LOG_FILE)  # 用 read_csv 替代 read_excel
             if not df_log.empty and "Check Number" in df_log.columns:
                 valid_nums = pd.to_numeric(
                     df_log["Check Number"], errors="coerce"
@@ -142,17 +142,17 @@ def get_next_check_number():
 
 
 def save_to_history(records):
-    """追加写入历史发纸台账 Excel"""
+    """追加写入历史发纸台账 CSV (不需要 openpyxl)"""
     df_new = pd.DataFrame(records)
     if os.path.exists(LOG_FILE):
         try:
-            df_old = pd.read_excel(LOG_FILE)
-            df_combined = pd.concat([df_old, df_new], ignore_index=True)
-            df_combined.to_excel(LOG_FILE, index=False)
+            # 如果文件已存在，不读入内存，直接追加写入 (mode='a', header=False)
+            df_new.to_csv(LOG_FILE, mode="a", index=False, header=False)
             return
         except Exception:
             pass
-    df_new.to_excel(LOG_FILE, index=False)
+    # 第一次创建时写入表头
+    df_new.to_csv(LOG_FILE, index=False)
 
 
 def merge_pdfs(pdf_bytes_list):
@@ -478,13 +478,17 @@ elif mode == "👷 场景二：施工队/工人周薪批量生成":
                         use_container_width=True
                     )
 
+                # 将数据转换为 CSV 文本，存入内存供下载 (不需要 openpyxl)
+                csv_summary_bytes = summary_df.to_csv(index=False).encode("utf-8-sig")
+                
+                # 下载按钮部分
                 with d_col2:
                     st.download_button(
-                        label="📊 下载【本期出账统计表 Excel】",
-                        data=excel_summary_buffer.getvalue(),
-                        file_name=f"Payroll_Summary_{pay_date}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
+                        label="📊 下载【本期出账统计表 CSV】",
+                        data=csv_summary_bytes,
+                        file_name=f"Payroll_Summary_{pay_date}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
                     )
 
                 with d_col3:
