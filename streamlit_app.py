@@ -22,6 +22,17 @@ WORKERS_CSV = "workers_config.csv"
 GS_SPREADSHEET_NAME = "Check Issuance History"  # Google 表格的名字
 GS_WORKSHEET_NAME = "Sheet1"                  # 工作表的名字
 
+# 预设常见施工/业务阶段 (Stage)
+PRESET_STAGES = [
+    "Stage 1: Demolition / Site Prep",
+    "Stage 2: Foundation & Framing",
+    "Stage 3: Rough-In (MEP)",
+    "Stage 4: Drywall & Insulation",
+    "Stage 5: Finishes & Painting",
+    "Stage 6: Final Inspection / Cleanup",
+    "Other / Custom Stage"
+]
+
 # ----------------- 1. 获取 Authorization 客户端 -----------------
 def get_gc_client():
     scope = [
@@ -35,7 +46,7 @@ def get_gc_client():
     credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.authorize(credentials)
 
-# ----------------- 2. 读取 Google Sheets (你的原始写法) -----------------
+# ----------------- 2. 读取 Google Sheets -----------------
 def read_file(name, sheet):
     gc = get_gc_client()
     worksheet = gc.open(name).worksheet(sheet)
@@ -48,7 +59,7 @@ def read_file(name, sheet):
 
 # ----------------- 3. 保存写入 Google Sheets -----------------
 def save_to_history(records):
-    """把生成的支票记录直接追加保存到 Google Sheets 中"""
+    """把生成的支票记录直接追加保存到 Google Sheets 中 (已增加 Stage 字段)"""
     try:
         gc = get_gc_client()
         worksheet = gc.open(GS_SPREADSHEET_NAME).worksheet(GS_WORKSHEET_NAME)
@@ -62,6 +73,7 @@ def save_to_history(records):
                 r["Company"],
                 r["Account"],
                 r["Project"],
+                r.get("Stage", ""),  # 包含 Stage 字段
                 r["Payee Name"],
                 r["Amount"],
                 r["Memo"]
@@ -75,7 +87,7 @@ def save_to_history(records):
 
 # ----------------- 4. 读取云端表格并计算最新可用支票号 -----------------
 def fetch_next_check_numbers_from_gs(df_p_list, default_start_number=1001):
-    """利用你的 read_file 读取数据，计算各个项目最新的 Check Number (+1)"""
+    """计算各个项目最新的 Check Number (+1)"""
     next_numbers = {}
     try:
         df_gs = read_file(GS_SPREADSHEET_NAME, GS_WORKSHEET_NAME)
@@ -221,7 +233,6 @@ mode = st.sidebar.radio(
     ],
 )
 
-
 if pdf_template_bytes is None:
     st.warning("请先在左侧上传 PDF 模板文件。")
     uploaded_tpl = st.sidebar.file_uploader("上传支票模板", type=["pdf"])
@@ -233,7 +244,7 @@ if pdf_template_bytes is None:
 # ==============================================================================
 if mode == "📝 场景一：单张手动生成":
     st.title("📝 场景一：单张手动生成支票")
-    st.caption("选择业务主体，自行直接输入支票编号与相关信息。")
+    st.caption("选择业务主体，自行输入支票编号、项目阶段与相关信息。")
 
     if not pdf_template_bytes:
         st.stop()
@@ -267,7 +278,15 @@ if mode == "📝 场景一：单张手动生成":
                 default_chk_val = 1001
 
             account_num = st.text_input("付款账号", value=default_account)
-            default_memo = f"{project_site} - Labor Fee"
+            
+            # --- 增加 Stage 选择 ---
+            stage_choice = st.selectbox("施工阶段 (Stage)", PRESET_STAGES)
+            if stage_choice == "Other / Custom Stage":
+                selected_stage = st.text_input("自定义施工阶段", value="Stage 1")
+            else:
+                selected_stage = stage_choice.split(":")[0].strip() # 简化显示为 Stage X
+
+            default_memo = f"{project_site} [{selected_stage}] - Labor Fee"
 
         else:
             company_name = "Moo Housing Inc"
@@ -292,6 +311,7 @@ if mode == "📝 场景一：单张手动生成":
             else:
                 account_num = account_choice
 
+            selected_stage = st.text_input("阶段/期别 (Stage)", value="Move-out")
             default_memo = "Deposit Refund"
 
         company_display = st.text_input("付款公司名称", value=company_name)
@@ -323,8 +343,6 @@ if mode == "📝 场景一：单张手动生成":
         )
         amount_words = number_to_words_usd(pay_amount)
 
-        # st.info(f"🔤 **英文金额大写预览：**\n\n`{amount_words}`")
-
     replacements = {
         "date": pay_date.strftime("%m/%d/%Y"),
         "name": payee_name,
@@ -334,12 +352,16 @@ if mode == "📝 场景一：单张手动生成":
         "number": str(check_num),
         "account": account_num,
     }
+    
+    # 提前填充 PDF 用于预览与下载 (修复 original 代码中的 NameError)
+    filled_pdf = fill_pdf_placeholders(pdf_template_bytes, replacements)
 
     with col2:
         st.subheader("👁️ 支票信息预览")
         st.markdown(f"""
         > **公司名称**: {company_name}  
         > **银行账号**: `{account_num}`  
+        > **项目 / 阶段**: {project_site} | **`{selected_stage}`**  
         > **支票编号**: `#{check_num}`  
         > **开单日期**: {pay_date.strftime("%Y-%m-%d")}  
         > **收款人**: **{payee_name}**  
@@ -356,6 +378,7 @@ if mode == "📝 场景一：单张手动生成":
                     "Company": company_display,
                     "Account": account_num,
                     "Project": project_site,
+                    "Stage": selected_stage,
                     "Payee Name": payee_name,
                     "Amount": pay_amount,
                     "Memo": memo_text,
@@ -365,13 +388,13 @@ if mode == "📝 场景一：单张手动生成":
                 st.balloons()
                 st.success(f"🎉 支票 #{check_num} 已成功生成并写入云端 Google Sheets！")
 
-            st.download_button(
-                label=f"📥 下载支票 PDF (#{check_num})",
-                data=filled_pdf,
-                file_name=f"Check_{check_num}_{payee_name}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
+        st.download_button(
+            label=f"📥 下载支票 PDF (#{check_num})",
+            data=filled_pdf,
+            file_name=f"Check_{check_num}_{payee_name}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
 
 # ==============================================================================
 # 场景 2：多项目/施工队周薪批量开单
@@ -421,7 +444,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     # --- 快捷添加面板 ---
     st.markdown("##### ➕ 添加发薪人员")
-    c1, c2, c3, c4, c5 = st.columns([2.5, 2.5, 2, 2.5, 1.5])
+    c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 2, 1.5, 2, 1.2])
 
     with c1:
         add_worker = st.selectbox(
@@ -433,10 +456,13 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     with c2:
         add_proj = st.selectbox("所属项目 (Project)", preset_project_list, key="input_p")
     with c3:
-        add_amt = st.number_input("金额 $ (Amount)", min_value=0.01, value=1200.00, step=50.0, key="input_a")
+        add_stage = st.selectbox("施工阶段 (Stage)", PRESET_STAGES, key="input_s")
+        stage_val = add_stage.split(":")[0].strip()
     with c4:
-        add_memo = st.text_input("工作备注 (Memo)", key="input_m")
+        add_amt = st.number_input("金额 $ (Amount)", min_value=0.01, value=1200.00, step=50.0, key="input_a")
     with c5:
+        add_memo = st.text_input("工作备注 (Memo)", key="input_m")
+    with c6:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("➕ 添加", type="primary", use_container_width=True):
             existing_checks = [
@@ -453,6 +479,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
             st.session_state.payroll_list.append({
                 "工人姓名 (Payee)": add_worker,
                 "所属项目 (Project)": add_proj,
+                "施工阶段 (Stage)": stage_val,
                 "支票编号 (Check #)": int(next_chk),
                 "金额 $ (Amount)": add_amt,
                 "工作备注 (Memo)": add_memo
@@ -475,6 +502,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
             column_config={
                 "工人姓名 (Payee)": st.column_config.SelectboxColumn("工人姓名 (Payee)", options=preset_worker_list),
                 "所属项目 (Project)": st.column_config.SelectboxColumn("所属项目 (Project)", options=preset_project_list),
+                "施工阶段 (Stage)": st.column_config.TextColumn("施工阶段 (Stage)"),
                 "支票编号 (Check #)": st.column_config.NumberColumn("支票编号 (Check #)", format="%d"),
                 "金额 $ (Amount)": st.column_config.NumberColumn("金额 $ (Amount)", format="$%.2f")
             }
@@ -504,6 +532,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
             for idx, row in df_payroll_input.iterrows():
                 worker_name = str(row.get("工人姓名 (Payee)", "")).strip()
                 project_name = str(row.get("所属项目 (Project)", "")).strip()
+                stage_name = str(row.get("施工阶段 (Stage)", "")).strip()
                 
                 try:
                     cur_check = int(row.get("支票编号 (Check #)", 0))
@@ -521,7 +550,9 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                 company_name = p_info["Company"]
                 account_num = p_info["Account"]
 
-                full_memo = f"{project_name} - {detail_memo}" if detail_memo else project_name
+                # 构造包含 Stage 的完整 Memo 文本
+                stage_prefix = f"[{stage_name}] " if stage_name else ""
+                full_memo = f"{project_name} {stage_prefix}- {detail_memo}" if detail_memo else f"{project_name} {stage_prefix}"
 
                 replacements = {
                     "date": pay_date.strftime("%m/%d/%Y"),
@@ -546,13 +577,14 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                     "Company": company_name,
                     "Account": account_num,
                     "Project": project_name,
+                    "Stage": stage_name,
                     "Payee Name": worker_name,
                     "Amount": amt,
                     "Memo": full_memo
                 })
 
             if records_log:
-                # 仅发送至云端 Google Sheets
+                # 发送至云端 Google Sheets
                 if save_to_history(records_log):
                     st.session_state.payroll_list = []
 
