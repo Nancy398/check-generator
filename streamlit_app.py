@@ -319,7 +319,7 @@ if mode == "📝 场景一：单张手动生成":
             )
 
 # ==============================================================================
-# 场景 2：多项目/施工队周薪批量开单
+# 场景 2：多项目/施工队周薪批量开单（已修复只生成 1 张支票的 Bug）
 # ==============================================================================
 elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     st.title("👷 多项目/施工队周薪批量生成")
@@ -353,7 +353,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     # ----------------- 2. 录入发薪明细 -----------------
     st.subheader("2. 录入发薪明细")
 
-    # 初始化表格 Session State（直接取列表第一项，不写冗余变量）
+    # 1. 初始化 Session State 数据
     if "payroll_df" not in st.session_state:
         first_worker = preset_worker_list[0] if preset_worker_list else ""
         first_project = preset_project_list[0] if preset_project_list else ""
@@ -370,35 +370,8 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
             }
         ])
 
-    # 按钮栏：放置一键自动补全按钮
-    col_info, col_btn = st.columns([3, 1])
-    with col_info:
-        st.info("💡 提示：点击表格下方的 **`+`** 可新增行。选好工人和项目后，点击右侧按钮即可**一键推算编号与填充 Default_Role**！")
-    with col_btn:
-        if st.button("🔄 智能补全 Memo & 支票号", type="secondary", use_container_width=True):
-            df_curr = st.session_state.payroll_df.copy()
-            
-            # 用于记录每个项目当前推算到了第几号
-            project_counters = proj_start_nums.copy()
-
-            for idx in df_curr.index:
-                worker = df_curr.loc[idx, "工人姓名 (Payee)"]
-                proj = df_curr.loc[idx, "所属项目 (Project)"]
-
-                # 1. 自动填入工人的 Default_Role 岗位
-                if worker in worker_role_map:
-                    df_curr.loc[idx, "工作备注 (Memo)"] = worker_role_map[worker]
-
-                # 2. 按项目自动推算自增的支票编号
-                if proj in project_counters:
-                    df_curr.loc[idx, "支票编号 (Check #)"] = project_counters[proj]
-                    project_counters[proj] += 1  # 编号自动 +1
-
-            st.session_state.payroll_df = df_curr
-            st.rerun()
-
-    # 交互式可编辑表格
-    edited_df = st.data_editor(
+    # 2. 交互式可编辑表格（去掉了会引发冲突的 Session State 重写）
+    df_payroll_input = st.data_editor(
         st.session_state.payroll_df,
         num_rows="dynamic",
         use_container_width=True,
@@ -424,8 +397,35 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
         },
     )
 
-    st.session_state.payroll_df = edited_df
-    df_payroll_input = edited_df
+    # 3. 按钮：补全 Memo 和计算支票号
+    col_info, col_btn = st.columns([3, 1])
+    with col_info:
+        st.info("💡 提示：点击表格下方 **`+`** 增加行。添加/选择完工人和项目后，点击右侧按钮**推算支票号与 Memo**。")
+    with col_btn:
+        if st.button("🔄 智能补全 Memo & 支票号", type="secondary", use_container_width=True):
+            # 将当前表格最新的所有行（包含刚加的行）复制出来
+            df_curr = df_payroll_input.copy()
+            project_counters = proj_start_nums.copy()
+
+            for idx in df_curr.index:
+                worker = str(df_curr.loc[idx, "工人姓名 (Payee)"])
+                proj = str(df_curr.loc[idx, "所属项目 (Project)"])
+
+                # 自动填入 Default_Role
+                if worker in worker_role_map:
+                    df_curr.loc[idx, "工作备注 (Memo)"] = worker_role_map[worker]
+
+                # 自动分配自增支票号
+                if proj in project_counters:
+                    df_curr.loc[idx, "支票编号 (Check #)"] = project_counters[proj]
+                    project_counters[proj] += 1
+
+            # 【核心关键修复】：更新数据并强制销毁 Widget Key 缓存，防止 Streamlit 把新增行丢掉！
+            st.session_state.payroll_df = df_curr
+            if "editor_payroll" in st.session_state:
+                del st.session_state["editor_payroll"]
+            
+            st.rerun()
 
     st.markdown("---")
 
@@ -493,6 +493,12 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                 for p_name, max_num in max_check_used.items():
                     df_projects.loc[df_projects["Project_Name"] == p_name, "Next_Check_Number"] = max_num + 1
                 save_project_presets(df_projects)
+
+                # 成功后重置表格 Session
+                if "payroll_df" in st.session_state:
+                    del st.session_state["payroll_df"]
+                if "editor_payroll" in st.session_state:
+                    del st.session_state["editor_payroll"]
 
                 st.balloons()
                 st.success(f"🎉 成功生成 {len(generated_pdfs)} 张支票！")
