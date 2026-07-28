@@ -350,43 +350,52 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-    # ----------------- 环节 2：录入发薪明细 -----------------
-    st.subheader("2. 录入发薪明细（自动读取工人默认工种 Default_Role）")
+# ----------------- 环节 2：录入发薪明细 -----------------
+    st.subheader("2. 录入发薪明细")
 
-    default_p1 = preset_project_list[0] if preset_project_list else "123 Main St"
-    default_p2 = preset_project_list[1] if len(preset_project_list) > 1 else default_p1
+    # 1. 动态读取 session_state，确保修改能被保存
+    if "payroll_df" not in st.session_state:
+        st.session_state.payroll_df = pd.DataFrame([
+            {
+                "工人姓名 (Payee)": preset_worker_list[0] if preset_worker_list else "",
+                "所属项目 (Project)": default_p1,
+                "支票编号 (Check #)": int(p1_start),
+                "金额 $ (Amount)": 1200.00,
+                "工作备注 (Memo)": worker_role_map.get(preset_worker_list[0], "Weekly Work") if preset_worker_list else "Weekly Work"
+            }
+        ])
 
-    p1_start = proj_start_nums.get(default_p1, 1001)
-    p2_start = proj_start_nums.get(default_p2, 5001) if default_p2 != default_p1 else p1_start + 1
+    col_btn1, col_btn2 = st.columns([2, 1])
+    with col_btn2:
+        # 点击此按钮，自动填充新增加行的 Memo 并计算支票号
+        if st.button("🔄 智能补全 Memo & 重新推算支票号", use_container_width=True):
+            df_curr = st.session_state.payroll_df.copy()
+            
+            # 用于记录每个项目当前排到了第几个号
+            project_counters = proj_start_nums.copy()
 
-    w1_name = preset_worker_list[0] if preset_worker_list else ""
-    w2_name = preset_worker_list[1] if len(preset_worker_list) > 1 else ""
+            for idx in df_curr.index:
+                worker = df_curr.loc[idx, "工人姓名 (Payee)"]
+                proj = df_curr.loc[idx, "所属项目 (Project)"]
 
-    # 读取 worker_role_map 带出工种
-    init_data = [
-        {
-            "工人姓名 (Payee)": w1_name,
-            "所属项目 (Project)": default_p1,
-            "支票编号 (Check #)": int(p1_start),
-            "金额 $ (Amount)": 1200.00,
-            "工作备注 (Memo)": worker_role_map.get(w1_name, "Weekly Work")
-        },
-        {
-            "工人姓名 (Payee)": w2_name,
-            "所属项目 (Project)": default_p2,
-            "支票编号 (Check #)": int(p2_start),
-            "金额 $ (Amount)": 950.00,
-            "工作备注 (Memo)": worker_role_map.get(w2_name, "Weekly Work")
-        }
-    ]
-    df_init = pd.DataFrame(init_data)
+                # 1. 自动根据工人更新 Memo (如果 Memo 为空或等于默认值)
+                if worker in worker_role_map:
+                    df_curr.loc[idx, "工作备注 (Memo)"] = worker_role_map[worker]
 
-    st.info("💡 提示：增加行或修改工人时，请检查支票号与工作备注。如果纸质支票废号掉，直接双击修改数字即可。")
+                # 2. 自动根据项目按顺序推算支票号
+                if proj in project_counters:
+                    df_curr.loc[idx, "支票编号 (Check #)"] = project_counters[proj]
+                    project_counters[proj] += 1  # 下一张自增 1
 
-    df_payroll_input = st.data_editor(
-        df_init,
+            st.session_state.payroll_df = df_curr
+            st.rerun()  # 刷新页面展示最新结果
+
+    # 展示交互表格
+    edited_df = st.data_editor(
+        st.session_state.payroll_df,
         num_rows="dynamic",
         use_container_width=True,
+        key="editor_payroll",
         column_config={
             "工人姓名 (Payee)": st.column_config.SelectboxColumn(
                 "工人姓名 (Payee)",
@@ -399,8 +408,6 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
             ),
             "支票编号 (Check #)": st.column_config.NumberColumn(
                 "支票编号 (Check #)",
-                help="自动推算的支票号，允许手动修改",
-                required=True,
                 format="%d"
             ),
             "金额 $ (Amount)": st.column_config.NumberColumn(
@@ -409,6 +416,10 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
             )
         },
     )
+
+    # 保持数据同步
+    st.session_state.payroll_df = edited_df
+    df_payroll_input = edited_df
 
     st.markdown("---")
 
