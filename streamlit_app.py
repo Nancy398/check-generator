@@ -237,7 +237,7 @@ if mode == "📝 场景一：单张手动生成":
 
     if not pdf_template_bytes:
         st.stop()
-col1, col2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("1. 基础信息填报")
