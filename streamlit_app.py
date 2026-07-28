@@ -7,7 +7,9 @@ import os
 import gspread
 from google.oauth2.service_account import Credentials
 
-# Page configuration
+# ------------------------------------------------------------------------------
+# 1. Page Configuration
+# ------------------------------------------------------------------------------
 st.set_page_config(
     page_title="支票开具与薪酬管理系统",
     page_icon="🧾",
@@ -15,7 +17,7 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------------------------
-# 1. 辅助函数：Google Sheets 读取与写入
+# 2. Google Sheets & Helper Functions
 # ------------------------------------------------------------------------------
 def get_gspread_client():
     """获取 gspread 客户端授权"""
@@ -34,59 +36,46 @@ def get_gspread_client():
 
 def fetch_next_check_numbers_from_gs(default_projects_df):
     """
-    从 Google Sheets (Check Issuance History -> Sheet1) 读取历史数据，
-    按 Project 统计已用到的最大 Check Number，并计算下一个起始号 (Max + 1)。
+    从 Google Sheets 读取历史记录，统计各项目最大 Check Number 并加 1 作为下一个起始号
     """
     next_numbers = {}
     try:
         client = get_gspread_client()
         if not client:
-            st.warning("⚠️ 未检测到 Credentials 凭证，将使用默认支票起始号。")
             return {row["Project_Name"]: int(row["Next_Check_Number"]) for _, row in default_projects_df.iterrows()}
 
         sheet_name = st.secrets.get("SPREADSHEET_NAME", "Check Issuance History")
         sheet = client.open(sheet_name).worksheet("Sheet1")
         
-        # 获取 Sheet1 的所有记录
         records = sheet.get_all_records()
-        
         if records:
             df_gs = pd.DataFrame(records)
             if "Project" in df_gs.columns and "Check Number" in df_gs.columns:
-                # 确保 Check Number 列是数值类型
                 df_gs["Check Number"] = pd.to_numeric(df_gs["Check Number"], errors="coerce")
-                
-                # 分组计算每个项目当前用到的最大支票号
                 max_checks = df_gs.groupby("Project")["Check Number"].max().to_dict()
                 
                 for _, row in default_projects_df.iterrows():
                     p_name = row["Project_Name"]
                     default_num = int(row["Next_Check_Number"])
-                    # 如果云端有该项目的记录，用 (最大号 + 1)；否则用默认号
                     if p_name in max_checks and pd.notnull(max_checks[p_name]):
                         next_numbers[p_name] = int(max_checks[p_name]) + 1
                     else:
                         next_numbers[p_name] = default_num
                 return next_numbers
-
     except Exception as e:
-        st.warning(f"⚠️ 从 Google Sheets 读取历史支票号失败 (原因: {str(e)})，已使用预设起始号。")
+        st.sidebar.warning(f"⚠️ 云端获取最新支票号失败: {str(e)}")
 
-    # 异常或空表时的兜底方案
     return {row["Project_Name"]: int(row["Next_Check_Number"]) for _, row in default_projects_df.iterrows()}
 
-
 def append_to_google_sheet(records_list):
-    """
-    将生成的支票明细追加保存到指定的 Google Sheet (Check Issuance History -> Sheet1)
-    """
+    """将生成的支票记录追加写入 Google Sheets (Sheet1)"""
     if not records_list:
         return False, "无数据可写入"
     
     try:
         client = get_gspread_client()
         if not client:
-            return False, "未找到 Google Service Account 密钥配置 (secrets.toml 或 service_account.json)"
+            return False, "未找到 Google Service Account 授权凭证"
 
         sheet_name = st.secrets.get("SPREADSHEET_NAME", "Check Issuance History")
         sheet = client.open(sheet_name).worksheet("Sheet1")
@@ -106,7 +95,6 @@ def append_to_google_sheet(records_list):
 
         sheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
         return True, "成功写入 Google Sheets"
-
     except Exception as e:
         return False, str(e)
 
@@ -122,20 +110,23 @@ def save_to_local_csv(records_list, filepath="check_issuance_history.csv"):
         new_df.to_csv(filepath, mode='w', header=True, index=False, encoding='utf-8-sig')
 
 def number_to_words_usd(amount):
+    """将数字金额转化为美金大写英文"""
     dollars = int(amount)
     cents = int(round((amount - dollars) * 100))
     return f"{dollars:,} AND {cents}/100 DOLLARS"
 
 def fill_pdf_placeholders(pdf_bytes, replacements):
+    """占位函数：根据 replacements 填充 PDF"""
     return pdf_bytes
 
 def merge_pdfs(pdf_bytes_list):
+    """占位函数：合并多个 PDF 字节集"""
     if not pdf_bytes_list:
         return b""
     return pdf_bytes_list[0]
 
 # ------------------------------------------------------------------------------
-# 2. 预设数据与初始化
+# 3. 基础预设数据初始化
 # ------------------------------------------------------------------------------
 preset_worker_list = ["张三", "李四", "王五", "赵六", "钱七"]
 worker_role_map = {
@@ -157,35 +148,137 @@ df_projects = load_project_presets()
 preset_project_list = df_projects["Project_Name"].tolist()
 
 # ------------------------------------------------------------------------------
-# 3. Streamlit 主界面
+# 4. Streamlit 侧边栏与模式切换
 # ------------------------------------------------------------------------------
 st.sidebar.title("⚙️ 导航与设置")
 mode = st.sidebar.radio(
     "选择业务场景",
-    ["👷 场景二：多项目/施工队周薪批量开单", "📜 查看历史记录"]
+    [
+        "📝 场景一：单张/常规即时开单",
+        "👷 场景二：多项目/施工队周薪批量开单",
+        "📜 查看历史记录"
+    ]
 )
 
 uploaded_pdf = st.sidebar.file_uploader("上传支票 PDF 模板", type=["pdf"])
 pdf_template_bytes = uploaded_pdf.getvalue() if uploaded_pdf else b"%PDF-1.4 dummy pdf bytes"
 
+# 从 Google Sheets 动态读取各项目最新支票起始号
+with st.spinner("🔄 正在同步云端 Google Sheets 数据..."):
+    latest_check_map = fetch_next_check_numbers_from_gs(df_projects)
+
+# ==============================================================================
+# 场景 1：单张/常规即时开单
+# ==============================================================================
+if mode == "📝 场景一：单张/常规即时开单":
+    st.title("📝 单张支票即时开具")
+    st.caption("适合日常单笔付款，自动关联项目默认公司账号与最新支票编号。")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("📋 开单信息录入")
+        
+        # 1. 选择项目
+        selected_proj = st.selectbox("选择所属项目 (Project)", preset_project_list)
+        
+        # 获取该项目的公司、账号和自动推算的最新支票号
+        p_row = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
+        default_next_chk = latest_check_map.get(selected_proj, int(p_row["Next_Check_Number"]))
+
+        # 2. 支票号与日期
+        c11, c12 = st.columns(2)
+        with c11:
+            chk_num = st.number_input("支票编号 (Check #)", value=int(default_next_chk), step=1)
+        with c12:
+            issue_date = st.date_input("开单日期", value=date.today())
+
+        # 3. 收款人与金额
+        payee = st.text_input("收款人姓名/单位 (Payee)", value="张三")
+        amount = st.number_input("金额 $ (Amount)", min_value=0.01, value=1500.00, step=100.0)
+        
+        # 4. 备注信息
+        memo_text = st.text_input("备注/用途 (Memo)", value="预付材料款/劳务费")
+
+        # 自动关联的公司信息显示
+        st.info(f"🏢 **出账公司**: {p_row['Company']} | 💳 **出账账号**: `{p_row['Account']}`")
+
+    with col2:
+        st.subheader("👁️ 支票信息预览")
+        st.markdown(f"""
+        > **公司名称**: {p_row['Company']}  
+        > **银行账号**: `{p_row['Account']}`  
+        > **支票编号**: `#{chk_num}`  
+        > **开单日期**: {issue_date.strftime("%Y-%m-%d")}  
+        > **收款人**: **{payee}**  
+        > **金额**: **${amount:,.2f}**  
+        > **金额大写**: *{number_to_words_usd(amount)}*  
+        > **Memo**: {selected_proj} - {memo_text}
+        """)
+
+        st.markdown("---")
+        if st.button("🚀 确认生成并写入云端", type="primary", use_container_width=True):
+            full_memo = f"{selected_proj} - {memo_text}" if memo_text else selected_proj
+            
+            # 组装数据记录
+            record = {
+                "Check Number": int(chk_num),
+                "Issue Date": issue_date.strftime("%Y-%m-%d"),
+                "Company": p_row['Company'],
+                "Account": p_row['Account'],
+                "Project": selected_proj,
+                "Payee Name": payee,
+                "Amount": amount,
+                "Memo": full_memo
+            }
+
+            # 1. 写入本地 CSV
+            save_to_local_csv([record])
+            
+            # 2. 写入 Google Sheets
+            gs_success, gs_msg = append_to_google_sheet([record])
+
+            # 3. 准备 PDF 下载
+            replacements = {
+                "date": issue_date.strftime("%m/%d/%Y"),
+                "name": payee,
+                "amount": f"{amount:,.2f}",
+                "amount_words": number_to_words_usd(amount),
+                "memo": full_memo,
+                "number": str(chk_num),
+                "account": p_row['Account']
+            }
+            single_pdf_bytes = fill_pdf_placeholders(pdf_template_bytes, replacements)
+
+            st.balloons()
+            if gs_success:
+                st.success("✅ 单张支票生成成功，并已同步写入 Google Sheets！")
+            else:
+                st.warning(f"⚠️ 支票生成成功，但同步至 Google Sheets 失败: {gs_msg}")
+
+            st.download_button(
+                label=f"📄 下载支票 PDF (#{chk_num})",
+                data=single_pdf_bytes,
+                file_name=f"Check_{chk_num}_{payee}.pdf",
+                mime="application/pdf",
+                type="primary",
+                use_container_width=True
+            )
+
 # ==============================================================================
 # 场景 2：多项目/施工队周薪批量开单
 # ==============================================================================
-if mode == "👷 场景二：多项目/施工队周薪批量开单":
+elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     st.title("👷 多项目/施工队周薪批量生成")
-    st.caption("自动从 Google Sheets 同步并递增编号，匹配工种，生成 PDF 并实时存入云端。")
+    st.caption("自动从 Google Sheets 读取最新编号，匹配工人工种，生成 PDF 并上传云端。")
 
     pay_date = st.date_input("发薪日期", value=date.today())
 
     st.markdown("---")
     
-    # ----------------- 1. 从 Google Sheets 读取并确认各项目起始支票号 -----------------
+    # ----------------- 1. 确认各项目起始支票号 -----------------
     st.subheader("1. 确认本期各项目起始支票号")
     
-    # 动态从云端 Google Sheets 读取各项目最大的 Check Number + 1
-    with st.spinner("🔄 正在从 Google Sheets 实时获取各项目最新支票号..."):
-        latest_check_map = fetch_next_check_numbers_from_gs(df_projects)
-
     proj_start_nums = {}
     cols = st.columns(min(len(df_projects), 4))
     for idx, p_row in df_projects.iterrows():
@@ -202,7 +295,7 @@ if mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-    # ----------------- 2. 初始化发薪数据列表与输入框状态 -----------------
+    # ----------------- 2. 录入发薪明细 -----------------
     st.subheader("2. 录入发薪明细")
 
     if "payroll_list" not in st.session_state:
@@ -216,17 +309,11 @@ if mode == "👷 场景二：多项目/施工队周薪批量开单":
         default_first_worker = preset_worker_list[0] if preset_worker_list else ""
         st.session_state.input_m = worker_role_map.get(default_first_worker, "")
 
-    # --- 快捷添加面板 ---
     st.markdown("##### ➕ 添加发薪人员")
     c1, c2, c3, c4, c5 = st.columns([2.5, 2.5, 2, 2.5, 1.5])
 
     with c1:
-        add_worker = st.selectbox(
-            "选择工人 (Payee)", 
-            preset_worker_list, 
-            key="input_w",
-            on_change=update_memo_on_worker_change
-        )
+        add_worker = st.selectbox("选择工人 (Payee)", preset_worker_list, key="input_w", on_change=update_memo_on_worker_change)
     with c2:
         add_proj = st.selectbox("所属项目 (Project)", preset_project_list, key="input_p")
     with c3:
@@ -258,7 +345,7 @@ if mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-    # --- 数据列表展示 ---
+    # 数据表格展示与在线修改
     if st.session_state.payroll_list:
         st.markdown(f"##### 📋 本期待开支票列表（共 **{len(st.session_state.payroll_list)}** 张）：")
         
@@ -290,7 +377,7 @@ if mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-    # ----------------- 3. 批量生成与写入 Google Sheets -----------------
+    # ----------------- 3. 批量生成与提交 -----------------
     if not df_payroll_input.empty:
         if st.button(f"🚀 确认无误，批量生成 {len(df_payroll_input)} 张支票", type="primary", use_container_width=True):
             account_pdf_dict = {}
@@ -349,20 +436,18 @@ if mode == "👷 场景二：多项目/施工队周薪批量开单":
                 })
 
             if records_log:
-                # 1. 保存本地 CSV 备份
+                # 写入本地 CSV 备份与 Google Sheets
                 save_to_local_csv(records_log)
-
-                # 2. 🟢 追加写入 Google Sheets (Check Issuance History -> Sheet1)
                 gs_success, gs_msg = append_to_google_sheet(records_log)
 
-                # 3. 清空输入列表
+                # 清空列表
                 st.session_state.payroll_list = []
 
                 st.balloons()
                 if gs_success:
-                    st.success(f"🎉 成功生成 {len(records_log)} 张支票！数据已自动保存至 **Google Sheets (`Check Issuance History` -> `Sheet1`)**。下次打开界面将自动读取新的最大编号！")
+                    st.success(f"🎉 成功生成 {len(records_log)} 张支票！数据已追加保存至 **Google Sheets (`Check Issuance History` -> `Sheet1`)**。")
                 else:
-                    st.warning(f"⚠️ PDF 与本地 CSV 记录已生成，但写入 Google Sheets 失败: {gs_msg}")
+                    st.warning(f"⚠️ PDF 已生成，但写入 Google Sheets 失败: {gs_msg}")
 
                 st.markdown("### 📊 本期出账汇总")
                 df_batch = pd.DataFrame(records_log)
@@ -385,55 +470,44 @@ if mode == "👷 场景二：多项目/施工队周薪批量开单":
                     st.dataframe(summary_project.style.format({"项目总人工费": "${:,.2f}"}), use_container_width=True, hide_index=True)
 
                 st.markdown("---")
-                st.markdown("### 📥 按账户单独下载 PDF 文件")
+                st.markdown("### 📥 下载结果")
 
                 for (comp_name, acc_num), item_list in account_pdf_dict.items():
                     pdf_bytes_list = [item[3] for item in item_list]
                     account_merged_pdf = merge_pdfs(pdf_bytes_list)
                     
-                    st.markdown(f"##### 💳 账户：**{comp_name}** | 账号：`{acc_num}`（共 {len(item_list)} 张）")
-                    
                     st.download_button(
-                        label=f"📄 下载【{comp_name} - {acc_num}】合并 PDF",
+                        label=f"📄 下载【{comp_name} - {acc_num}】合并 PDF（共 {len(item_list)} 张）",
                         data=account_merged_pdf,
                         file_name=f"Checks_{comp_name}_{acc_num}_{pay_date}.pdf",
                         mime="application/pdf",
                         type="primary"
                     )
 
-                st.markdown("---")
-                st.markdown("##### 📦 更多导出选项")
-                
-                csv_bytes = df_batch.to_csv(index=False).encode('utf-8-sig')
-                
-                zip_buf = io.BytesIO()
-                with zipfile.ZipFile(zip_buf, "w") as zf:
-                    for (comp_name, acc_num), item_list in account_pdf_dict.items():
-                        for chk, proj, py, pdf_b in item_list:
-                            zf.writestr(f"[{acc_num}]_Check_{chk}_[{proj}]_{py}.pdf", pdf_b)
-
-                d1, d2 = st.columns(2)
-                with d1:
-                    st.download_button(
-                        label="📊 下载【本期出账总账单 CSV】",
-                        data=csv_bytes,
-                        file_name=f"Payroll_Summary_{pay_date}.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                with d2:
-                    st.download_button(
-                        label="📦 下载所有单张 PDF ZIP 打包",
-                        data=zip_buf.getvalue(),
-                        file_name=f"Payroll_Checks_SinglePDFs_{pay_date}.zip",
-                        mime="application/zip",
-                        use_container_width=True
-                    )
-
+# ==============================================================================
+# 历史记录查看
+# ==============================================================================
 elif mode == "📜 查看历史记录":
     st.title("📜 支票开具历史记录")
+    
+    # 尝试读取云端历史数据
+    try:
+        client = get_gspread_client()
+        if client:
+            sheet_name = st.secrets.get("SPREADSHEET_NAME", "Check Issuance History")
+            records = client.open(sheet_name).worksheet("Sheet1").get_all_records()
+            if records:
+                st.markdown("#### ☁️ Google Sheets 云端历史数据")
+                st.dataframe(pd.DataFrame(records), use_container_width=True)
+            else:
+                st.info("云端 Sheet1 暂无历史记录。")
+    except Exception as e:
+        st.warning(f"获取云端数据失败: {e}")
+
+    st.markdown("---")
+    st.markdown("#### 💻 本地 CSV 备份数据")
     if os.path.exists("check_issuance_history.csv"):
         df_hist = pd.read_csv("check_issuance_history.csv")
         st.dataframe(df_hist, use_container_width=True)
     else:
-        st.info("暂无本地开单历史记录。")
+        st.info("本地暂无历史记录文件。")
