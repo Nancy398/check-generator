@@ -215,17 +215,6 @@ if mode == "📝 场景一：单张手动生成":
         else:
             # === Moo Housing Inc 模式：退押金专享选项 ===
             company_name = "Moo Housing Inc"
-            
-            project_options = preset_project_list + ["+ 自定义新项目"]
-            selected_proj = st.selectbox("关联房产/项目 (Project)", project_options)
-
-            if selected_proj != "+ 自定义新项目":
-                p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
-                default_check_num = int(p_info["Next_Check_Number"])
-                project_site = selected_proj
-            else:
-                project_site = st.text_input("输入房产名称/地址", value="Moo Housing Property")
-                default_check_num = 1001
 
             # 账号选择：8652 / 3738 / Other
             account_choice = st.selectbox(
