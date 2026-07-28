@@ -228,118 +228,121 @@ st.sidebar.title("⚙️ 系统导航")
 mode = st.sidebar.radio(
     "请选择业务场景：",
     [
-        "📝 场景一：单张手动生成",
-        "👷 场景二：多项目/施工队周薪批量开单",
+        "📝 Single Mannul Check",
+        "👷 Construction Bulk Checks",
     ],
 )
 
 if pdf_template_bytes is None:
-    st.warning("请先在左侧上传 PDF 模板文件。")
-    uploaded_tpl = st.sidebar.file_uploader("上传支票模板", type=["pdf"])
+    st.warning("Please Upload Template")
+    uploaded_tpl = st.sidebar.file_uploader("Upload Template", type=["pdf"])
     if uploaded_tpl:
         pdf_template_bytes = uploaded_tpl.read()
 
 # ==============================================================================
 # 场景 1：单张手动生成支票
 # ==============================================================================
-if mode == "📝 场景一：单张手动生成":
-    st.title("📝 场景一：单张手动生成支票")
-    st.caption("选择业务主体，自行输入支票编号、项目阶段与相关信息。")
+if mode == "📝 Single Mannul Check":
+    st.title("📝 Single Mannul Check")
+    st.caption("Please enter the information")
 
     if not pdf_template_bytes:
         st.stop()
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("1. 基础信息填报")
+        st.subheader("Information")
 
         biz_mode = st.radio(
-            "选择业务主体 (Business Entity)：",
-            ["🏗️ Moo Construction (施工/项目模式)", "🏠 Moo Housing Inc (房屋租赁/退押金模式)"],
+            "Business Entity：",
+            ["🏗️ Moo Construction", "🏠 Moo Housing Inc"],
             horizontal=True,
         )
 
         st.markdown("---")
 
         if "Construction" in biz_mode:
-            company_name = "Moo Construction Inc"
+            company_name = "Moo Construction"
             
-            project_options = preset_project_list + ["+ 自定义新项目"]
-            selected_proj = st.selectbox("选择工地/项目 (Project)", project_options)
+            project_options = preset_project_list + ["+ New Project"]
+            selected_proj = st.selectbox("Project", project_options)
 
-            if selected_proj != "+ 自定义新项目":
+            if selected_proj != "+ New Project":
                 p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
                 default_account = p_info["Account"]
                 project_site = selected_proj
                 default_chk_val = latest_check_map.get(selected_proj, 1001)
             else:
-                project_site = st.text_input("输入新项目名称", value="New Site")
+                project_site = st.text_input("Project Name", value="New Site")
                 default_account = "ACC-8652"
                 default_chk_val = 1001
 
-            account_num = st.text_input("付款账号", value=default_account)
+            account_num = st.text_input("Bank Account", value=default_account)
             
             # --- 增加 Stage 选择 ---
-            stage_choice = st.selectbox("施工阶段 (Stage)", PRESET_STAGES)
+            stage_choice = st.selectbox("Stage", PRESET_STAGES)
             if stage_choice == "Other / Custom Stage":
-                selected_stage = st.text_input("自定义施工阶段", value="Stage 1")
+                selected_stage = st.text_input("Custom Stage", value="Stage 1")
             else:
                 selected_stage = stage_choice.split(":")[0].strip() # 简化显示为 Stage X
+            memo_text = st.text_input(
+                "备注 (Memo)", value=default_memo
+            )
 
-            default_memo = f"{project_site} [{selected_stage}] - Labor Fee"
+            default_memo = f"{project_site} [{selected_stage}] - {memo_text}"
 
         else:
             company_name = "Moo Housing Inc"
             
-            project_options = preset_project_list + ["+ 自定义新项目"]
-            selected_proj = st.selectbox("关联房产/项目 (Project)", project_options)
+            project_options = preset_project_list + ["+ New Project"]
+            selected_proj = st.selectbox("Project", project_options)
 
-            if selected_proj != "+ 自定义新项目":
+            if selected_proj != "+ New Project":
                 project_site = selected_proj
                 default_chk_val = latest_check_map.get(selected_proj, 1001)
             else:
-                project_site = st.text_input("输入房产名称/地址", value="Moo Housing Property")
+                project_site = st.text_input("Enter Address", value="Moo Housing Property")
                 default_chk_val = 1001
 
             account_choice = st.selectbox(
-                "选择付款账号 (Account)",
-                ["ACC-8652", "ACC-3738", "Other (自定义账号)"]
+                "Bank Account",
+                ["ACC-8652", "ACC-3738", "Other"]
             )
 
-            if account_choice == "Other (自定义账号)":
-                account_num = st.text_input("输入自定义账号", value="ACC-")
+            if account_choice == "自定义账号":
+                account_num = st.text_input("Enter Account", value="ACC-")
             else:
                 account_num = account_choice
 
-            selected_stage = st.text_input("阶段/期别 (Stage)", value="Move-out")
+            selected_stage = st.text_input("Stage", value="Move-out")
             default_memo = "Deposit Refund"
 
-        company_display = st.text_input("付款公司名称", value=company_name)
+        company_display = st.text_input("Company", value=company_name)
 
         st.markdown("---")
 
         payee_name = st.text_input(
-            "收款人 (Payee Name)",
+            "Payee Name",
             value="John Smith",
         )
         pay_amount = st.number_input(
-            "金额 $ (Amount)", min_value=0.01, value=1500.00, step=100.0
+            "Amount", min_value=0.01, value=1500.00, step=100.0
         )
 
         c_a, c_b = st.columns(2)
         with c_a:
-            pay_date = st.date_input("开票日期", value=date.today())
+            pay_date = st.date_input("Date", value=date.today())
         with c_b:
             check_num = st.number_input(
-                "支票编号 (Check Number)",
+                "Check Number",
                 min_value=1,
                 value=int(default_chk_val),
                 step=1,
-                help="系统已从 Google Sheets 读取最新可用编号，可自由更改"
+                help="Automatically generated by System"
             )
 
         memo_text = st.text_input(
-            "备注 (Memo)", value=default_memo
+            "Memo", value=default_memo
         )
         amount_words = number_to_words_usd(pay_amount)
 
@@ -357,20 +360,20 @@ if mode == "📝 场景一：单张手动生成":
     filled_pdf = fill_pdf_placeholders(pdf_template_bytes, replacements)
 
     with col2:
-        st.subheader("👁️ 支票信息预览")
+        st.subheader("👁️ Check Preview")
         st.markdown(f"""
-        > **公司名称**: {company_name}  
-        > **银行账号**: `{account_num}`  
-        > **项目 / 阶段**: {project_site} | **`{selected_stage}`**  
-        > **支票编号**: `#{check_num}`  
-        > **开单日期**: {pay_date.strftime("%Y-%m-%d")}  
-        > **收款人**: **{payee_name}**  
-        > **金额**: **${pay_amount:,.2f}**  
-        > **金额大写**: *{amount_words}*  
+        > **Company**: {company_name}  
+        > **Bank Account**: `{account_num}`  
+        > **Stage**: {project_site} | **`{selected_stage}`**  
+        > **Check Number**: `#{check_num}`  
+        > **Date**: {pay_date.strftime("%Y-%m-%d")}  
+        > **Payee**: **{payee_name}**  
+        > **Amount**: **${pay_amount:,.2f}**  
+        > **Amount Words**: *{amount_words}*  
         > **Memo**: {memo_text}
         """)
 
-        if st.button("🚀 确认生成并推送至 Google Sheets", type="primary", use_container_width=True):
+        if st.button("🚀 Successfully transfer to Google Sheets", type="primary", use_container_width=True):
             record = [
                 {
                     "Check Number": check_num,
@@ -386,10 +389,10 @@ if mode == "📝 场景一：单张手动生成":
             ]
             if save_to_history(record):
                 st.balloons()
-                st.success(f"🎉 支票 #{check_num} 已成功生成并写入云端 Google Sheets！")
+                st.success(f"🎉 Check #{check_num} Successfully transfer to Google Sheets！")
 
         st.download_button(
-            label=f"📥 下载支票 PDF (#{check_num})",
+            label=f"📥 Download PDF (#{check_num})",
             data=filled_pdf,
             file_name=f"Check_{check_num}_{payee_name}.pdf",
             mime="application/pdf",
@@ -399,19 +402,18 @@ if mode == "📝 场景一：单张手动生成":
 # ==============================================================================
 # 场景 2：多项目/施工队周薪批量开单
 # ==============================================================================
-elif mode == "👷 场景二：多项目/施工队周薪批量开单":
-    st.title("👷 多项目/施工队周薪批量生成")
-    st.caption("从云端推算项目起始号，快捷录入并自动同步至 Google Sheets。")
+elif mode == "👷 Construction Bulk Checks":
+    st.title("👷 Construction Bulk Checks")
 
     if not pdf_template_bytes:
         st.stop()
 
-    pay_date = st.date_input("发薪日期", value=date.today())
+    pay_date = st.date_input("Date", value=date.today())
 
     st.markdown("---")
     
     # ----------------- 1. 确认各项目起始支票号 -----------------
-    st.subheader("1. 确认本期各项目起始支票号")
+    st.subheader("1. Confirm the start check number")
 
     proj_start_nums = {}
     cols = st.columns(min(len(df_projects), 4))
@@ -429,7 +431,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     st.markdown("---")
 
     # ----------------- 2. 初始化发薪数据列表 -----------------
-    st.subheader("2. 录入发薪明细")
+    st.subheader("2.Information")
 
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
@@ -443,32 +445,32 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
         st.session_state.input_m = worker_role_map.get(default_first_worker, "")
 
     # --- 快捷添加面板 ---
-    st.markdown("##### ➕ 添加发薪人员")
+    st.markdown("##### ➕ New Check")
     c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 2, 1.5, 2, 1.2])
 
     with c1:
         add_worker = st.selectbox(
-            "选择工人 (Payee)", 
+            "Payee", 
             preset_worker_list, 
             key="input_w",
             on_change=update_memo_on_worker_change
         )
     with c2:
-        add_proj = st.selectbox("所属项目 (Project)", preset_project_list, key="input_p")
+        add_proj = st.selectbox("Project", preset_project_list, key="input_p")
     with c3:
-        add_stage = st.selectbox("施工阶段 (Stage)", PRESET_STAGES, key="input_s")
+        add_stage = st.selectbox("Stage", PRESET_STAGES, key="input_s")
         stage_val = add_stage.split(":")[0].strip()
     with c4:
-        add_amt = st.number_input("金额 $ (Amount)", min_value=0.01, value=1200.00, step=50.0, key="input_a")
+        add_amt = st.number_input("Amount", min_value=0.01, value=1200.00, step=50.0, key="input_a")
     with c5:
-        add_memo = st.text_input("工作备注 (Memo)", key="input_m")
+        add_memo = st.text_input("Memo", key="input_m")
     with c6:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("➕ 添加", type="primary", use_container_width=True):
+        if st.button("➕ Add", type="primary", use_container_width=True):
             existing_checks = [
-                row["支票编号 (Check #)"] 
+                row["Check #"] 
                 for row in st.session_state.payroll_list 
-                if row["所属项目 (Project)"] == add_proj
+                if row["Project"] == add_proj
             ]
             
             if existing_checks:
@@ -477,12 +479,12 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                 next_chk = proj_start_nums.get(add_proj, 1001)
 
             st.session_state.payroll_list.append({
-                "工人姓名 (Payee)": add_worker,
-                "所属项目 (Project)": add_proj,
-                "施工阶段 (Stage)": stage_val,
-                "支票编号 (Check #)": int(next_chk),
-                "金额 $ (Amount)": add_amt,
-                "工作备注 (Memo)": add_memo
+                "Payee": add_worker,
+                "Project": add_proj,
+                "Stage": stage_val,
+                "Check #": int(next_chk),
+                "Amount": add_amt,
+                "Memo": add_memo
             })
             st.rerun()
 
@@ -490,7 +492,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     # --- 数据列表展示 ---
     if st.session_state.payroll_list:
-        st.markdown(f"##### 📋 本期待开支票列表（共 **{len(st.session_state.payroll_list)}** 张）：")
+        st.markdown(f"##### 📋 List of Pending Checks ({len(st.session_state.payroll_list)} total):")
         
         df_current = pd.DataFrame(st.session_state.payroll_list)
 
@@ -500,48 +502,48 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
             use_container_width=True,
             key="payroll_table_editor",
             column_config={
-                "工人姓名 (Payee)": st.column_config.SelectboxColumn("工人姓名 (Payee)", options=preset_worker_list),
-                "所属项目 (Project)": st.column_config.SelectboxColumn("所属项目 (Project)", options=preset_project_list),
-                "施工阶段 (Stage)": st.column_config.TextColumn("施工阶段 (Stage)"),
-                "支票编号 (Check #)": st.column_config.NumberColumn("支票编号 (Check #)", format="%d"),
-                "金额 $ (Amount)": st.column_config.NumberColumn("金额 $ (Amount)", format="$%.2f")
+                "Payee": st.column_config.SelectboxColumn("Payee", options=preset_worker_list),
+                "Project": st.column_config.SelectboxColumn("Project", options=preset_project_list),
+                "Stage": st.column_config.TextColumn("Stage"),
+                "Check #": st.column_config.NumberColumn("Check #", format="%d"),
+                "Amount": st.column_config.NumberColumn("Amount", format="$%.2f")
             }
         )
 
         st.session_state.payroll_list = edited_df.to_dict(orient="records")
 
-        if st.button("🗑️ 清空列表重新录入", type="secondary"):
+        if st.button("🗑️ Clear", type="secondary"):
             st.session_state.payroll_list = []
             st.rerun()
 
         df_payroll_input = edited_df
     else:
-        st.info("💡 列表中暂无数据，请在上方选择工人与项目后点击 **【➕ 添加】** 按钮增加人员。")
+        st.info("💡 No data in the list. Please select a worker and project above, then click **[➕ Add]** to add team members.")
         df_payroll_input = pd.DataFrame()
 
     st.markdown("---")
 
     # ----------------- 3. 批量生成与导出 -----------------
     if not df_payroll_input.empty:
-        if st.button(f"🚀 确认无误，批量生成 {len(df_payroll_input)} 张支票", type="primary", use_container_width=True):
+        if st.button(f"🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks", type="primary", use_container_width=True):
             account_pdf_dict = {}
             records_log = []
 
             proj_map = df_projects.set_index("Project_Name").to_dict(orient="index")
 
             for idx, row in df_payroll_input.iterrows():
-                worker_name = str(row.get("工人姓名 (Payee)", "")).strip()
-                project_name = str(row.get("所属项目 (Project)", "")).strip()
-                stage_name = str(row.get("施工阶段 (Stage)", "")).strip()
+                worker_name = str(row.get("Payee", "")).strip()
+                project_name = str(row.get("Project", "")).strip()
+                stage_name = str(row.get("Stage", "")).strip()
                 
                 try:
-                    cur_check = int(row.get("支票编号 (Check #)", 0))
-                    amt = float(row.get("金额 $ (Amount)", 0.0))
+                    cur_check = int(row.get("Check #", 0))
+                    amt = float(row.get("Amount", 0.0))
                 except (ValueError, TypeError):
                     cur_check = 0
                     amt = 0.0
 
-                detail_memo = str(row.get("工作备注 (Memo)", "")).strip()
+                detail_memo = str(row.get("Memo", "")).strip()
 
                 if amt <= 0 or not worker_name or cur_check <= 0:
                     continue
@@ -589,39 +591,39 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                     st.session_state.payroll_list = []
 
                     st.balloons()
-                    st.success(f"🎉 成功生成 {len(records_log)} 张支票！数据已同步至 Google Sheets。")
+                    st.success(f"🎉 Successfully generated {len(records_log)} check(s)! Data synced to Google Sheets.")
 
-                    st.markdown("### 📊 本期出账汇总")
+                    st.markdown("### 📊 Current Period Disbursement Summary")
                     df_batch = pd.DataFrame(records_log)
                     col_sum1, col_sum2 = st.columns(2)
 
                     with col_sum1:
-                        st.markdown("#### 🏢 按公司 / 账号汇总")
+                        st.markdown("#### 🏢 Summary by Company / Account")
                         summary_company = df_batch.groupby(["Company", "Account"]).agg(
-                            总金额=("Amount", "sum"),
-                            支票张数=("Check Number", "count")
+                            Total Amount=("Amount", "sum"),
+                            Total Number=("Check Number", "count")
                         ).reset_index()
-                        st.dataframe(summary_company.style.format({"总金额": "${:,.2f}"}), use_container_width=True, hide_index=True)
+                        st.dataframe(summary_company.style.format({"Total Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
 
                     with col_sum2:
-                        st.markdown("#### 🏗️ 按工地项目汇总")
+                        st.markdown("#### 🏗️ Summary by Project")
                         summary_project = df_batch.groupby(["Project", "Company"]).agg(
-                            项目总人工费=("Amount", "sum"),
-                            工人人数=("Check Number", "count")
+                            Total Labor Cost=("Amount", "sum"),
+                            Worker Count=("Check Number", "count")
                         ).reset_index()
-                        st.dataframe(summary_project.style.format({"项目总人工费": "${:,.2f}"}), use_container_width=True, hide_index=True)
+                        st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
 
                     st.markdown("---")
-                    st.markdown("### 📥 按账户单独下载 PDF 文件")
+                    st.markdown("### 📥 Download PDFs by Account")
 
                     for (comp_name, acc_num), item_list in account_pdf_dict.items():
                         pdf_bytes_list = [item[3] for item in item_list]
                         account_merged_pdf = merge_pdfs(pdf_bytes_list)
                         
-                        st.markdown(f"##### 💳 账户：**{comp_name}** | 账号：`{acc_num}`（共 {len(item_list)} 张支票）")
+                        st.markdown(f"##### 💳 Account: **{comp_name}** | No.: `{acc_num}` ({len(item_list)} check(s) total)")
                         
                         st.download_button(
-                            label=f"📄 下载【{comp_name} - {acc_num}】合并 PDF",
+                            label=f"📄 Download Merged PDF ({comp_name} - {acc_num})",
                             data=account_merged_pdf,
                             file_name=f"Checks_{comp_name}_{acc_num}_{pay_date}.pdf",
                             mime="application/pdf",
@@ -629,7 +631,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                         )
 
                     st.markdown("---")
-                    st.markdown("##### 📦 更多导出选项")
+                    st.markdown("##### 📦 More Export Options")
                     
                     csv_bytes = df_batch.to_csv(index=False).encode('utf-8-sig')
                     
@@ -642,7 +644,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                     d1, d2 = st.columns(2)
                     with d1:
                         st.download_button(
-                            label="📊 下载【本期出账总账单 CSV】",
+                            label="📊 Download Payroll Summary (CSV)",
                             data=csv_bytes,
                             file_name=f"Payroll_Summary_{pay_date}.csv",
                             mime="text/csv",
@@ -650,7 +652,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                         )
                     with d2:
                         st.download_button(
-                            label="📦 下载所有单张 PDF ZIP 打包",
+                            label="📦 Download All Individual PDFs (ZIP)",
                             data=zip_buf.getvalue(),
                             file_name=f"Payroll_Checks_SinglePDFs_{pay_date}.zip",
                             mime="application/zip",
