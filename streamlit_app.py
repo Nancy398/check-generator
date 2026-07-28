@@ -319,11 +319,11 @@ if mode == "📝 场景一：单张手动生成":
             )
 
 # ==============================================================================
-# 场景 2：多项目混合周薪批量开单（融入 Default_Role 工种带出）
+# 场景 2：多项目/施工队周薪批量开单
 # ==============================================================================
 elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     st.title("👷 多项目/施工队周薪批量生成")
-    st.caption("确认各项目起始号后，表格将自动推算支票号；工人工种角色将自动匹配。")
+    st.caption("录入发薪明细，系统可根据各项目配置及工人默认岗位自动补全信息。")
 
     if not pdf_template_bytes:
         st.stop()
@@ -332,7 +332,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
     
-    # ----------------- 环节 1：确认各项目起始支票号 -----------------
+    # ----------------- 1. 确认各项目起始支票号 -----------------
     st.subheader("1. 确认本期各项目起始支票号")
 
     proj_start_nums = {}
@@ -350,47 +350,54 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-# ----------------- 环节 2：录入发薪明细 -----------------
+    # ----------------- 2. 录入发薪明细 -----------------
     st.subheader("2. 录入发薪明细")
 
-    # 1. 动态读取 session_state，确保修改能被保存
+    # 初始化表格 Session State（直接取列表第一项，不写冗余变量）
     if "payroll_df" not in st.session_state:
+        first_worker = preset_worker_list[0] if preset_worker_list else ""
+        first_project = preset_project_list[0] if preset_project_list else ""
+        first_role = worker_role_map.get(first_worker, "")
+        first_check = proj_start_nums.get(first_project, 1001)
+
         st.session_state.payroll_df = pd.DataFrame([
             {
-                "工人姓名 (Payee)": preset_worker_list[0] if preset_worker_list else "",
-                "所属项目 (Project)": default_p1,
-                "支票编号 (Check #)": int(p1_start),
+                "工人姓名 (Payee)": first_worker,
+                "所属项目 (Project)": first_project,
+                "支票编号 (Check #)": int(first_check),
                 "金额 $ (Amount)": 1200.00,
-                "工作备注 (Memo)": worker_role_map.get(preset_worker_list[0], "Weekly Work") if preset_worker_list else "Weekly Work"
+                "工作备注 (Memo)": first_role
             }
         ])
 
-    col_btn1, col_btn2 = st.columns([2, 1])
-    with col_btn2:
-        # 点击此按钮，自动填充新增加行的 Memo 并计算支票号
-        if st.button("🔄 智能补全 Memo & 重新推算支票号", use_container_width=True):
+    # 按钮栏：放置一键自动补全按钮
+    col_info, col_btn = st.columns([3, 1])
+    with col_info:
+        st.info("💡 提示：点击表格下方的 **`+`** 可新增行。选好工人和项目后，点击右侧按钮即可**一键推算编号与填充 Default_Role**！")
+    with col_btn:
+        if st.button("🔄 智能补全 Memo & 支票号", type="secondary", use_container_width=True):
             df_curr = st.session_state.payroll_df.copy()
             
-            # 用于记录每个项目当前排到了第几个号
+            # 用于记录每个项目当前推算到了第几号
             project_counters = proj_start_nums.copy()
 
             for idx in df_curr.index:
                 worker = df_curr.loc[idx, "工人姓名 (Payee)"]
                 proj = df_curr.loc[idx, "所属项目 (Project)"]
 
-                # 1. 自动根据工人更新 Memo (如果 Memo 为空或等于默认值)
+                # 1. 自动填入工人的 Default_Role 岗位
                 if worker in worker_role_map:
                     df_curr.loc[idx, "工作备注 (Memo)"] = worker_role_map[worker]
 
-                # 2. 自动根据项目按顺序推算支票号
+                # 2. 按项目自动推算自增的支票编号
                 if proj in project_counters:
                     df_curr.loc[idx, "支票编号 (Check #)"] = project_counters[proj]
-                    project_counters[proj] += 1  # 下一张自增 1
+                    project_counters[proj] += 1  # 编号自动 +1
 
             st.session_state.payroll_df = df_curr
-            st.rerun()  # 刷新页面展示最新结果
+            st.rerun()
 
-    # 展示交互表格
+    # 交互式可编辑表格
     edited_df = st.data_editor(
         st.session_state.payroll_df,
         num_rows="dynamic",
@@ -417,13 +424,12 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
         },
     )
 
-    # 保持数据同步
     st.session_state.payroll_df = edited_df
     df_payroll_input = edited_df
 
     st.markdown("---")
 
-    # ----------------- 环节 3：批量生成与更新 -----------------
+    # ----------------- 3. 批量生成与更新 -----------------
     if not df_payroll_input.empty:
         if st.button("🚀 确认无误，批量生成支票", type="primary", use_container_width=True):
             generated_pdfs = []
