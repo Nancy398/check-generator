@@ -48,7 +48,6 @@ def load_project_presets():
         df_default.to_csv(PROJECTS_CSV, index=False)
 
     df_p = pd.read_csv(PROJECTS_CSV)
-    # 确保 Next_Check_Number 列存在
     if "Next_Check_Number" not in df_p.columns:
         df_p["Next_Check_Number"] = 1001
         df_p.to_csv(PROJECTS_CSV, index=False)
@@ -61,24 +60,31 @@ def save_project_presets(df_p):
 
 
 def load_worker_presets():
-    """读取常用工人列表"""
+    """读取常用工人及其默认岗位 (Default_Role)"""
     if not os.path.exists(WORKERS_CSV):
         df_default = pd.DataFrame(
             [
-                {"Worker_Name": "John Smith"},
-                {"Worker_Name": "Carlos Mendez"},
-                {"Worker_Name": "David Lee"},
-                {"Worker_Name": "Jose Rodriguez"},
+                {"Worker_Name": "John Smith", "Default_Role": "Framing Lead"},
+                {"Worker_Name": "Carlos Mendez", "Default_Role": "Drywaller"},
+                {"Worker_Name": "David Lee", "Default_Role": "Electrician"},
+                {"Worker_Name": "Jose Rodriguez", "Default_Role": "General Labor"},
             ]
         )
         df_default.to_csv(WORKERS_CSV, index=False)
 
     df_workers = pd.read_csv(WORKERS_CSV)
-    return df_workers["Worker_Name"].dropna().tolist()
+    if "Default_Role" not in df_workers.columns:
+        df_workers["Default_Role"] = "Worker"
+        df_workers.to_csv(WORKERS_CSV, index=False)
+    return df_workers
 
 
 df_projects = load_project_presets()
-preset_worker_list = load_worker_presets()
+df_workers = load_worker_presets()
+
+# 构建工人及角色的字典与列表
+worker_role_map = dict(zip(df_workers["Worker_Name"], df_workers["Default_Role"]))
+preset_worker_list = df_workers["Worker_Name"].dropna().tolist()
 preset_project_list = df_projects["Project_Name"].dropna().tolist()
 
 
@@ -168,11 +174,11 @@ if pdf_template_bytes is None:
         pdf_template_bytes = uploaded_tpl.read()
 
 # ==============================================================================
-# 场景 1：单张手动生成支票（带 Moo Housing / Construction 模式切换与独立支票号）
+# 场景 1：单张手动生成支票（支票号自由手动输入）
 # ==============================================================================
 if mode == "📝 场景一：单张手动生成":
     st.title("📝 场景一：单张手动生成支票")
-    st.caption("选择业务主体，自动适配账号选项与默认备注，并自动带出选定项目独立的下一张支票号。")
+    st.caption("选择业务主体，自行直接输入支票编号与相关信息。")
 
     if not pdf_template_bytes:
         st.stop()
@@ -193,7 +199,6 @@ if mode == "📝 场景一：单张手动生成":
 
         # ----------------- 分支逻辑处理 -----------------
         if "Construction" in biz_mode:
-            # === Construction 模式：原逻辑（按项目联动） ===
             company_name = "Moo Construction Inc"
             
             project_options = preset_project_list + ["+ 自定义新项目"]
@@ -202,21 +207,25 @@ if mode == "📝 场景一：单张手动生成":
             if selected_proj != "+ 自定义新项目":
                 p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
                 default_account = p_info["Account"]
-                default_check_num = int(p_info["Next_Check_Number"])
                 project_site = selected_proj
             else:
                 project_site = st.text_input("输入新项目名称", value="New Site")
                 default_account = "ACC-8652"
-                default_check_num = 1001
 
             account_num = st.text_input("付款账号", value=default_account)
-            default_memo = f"{project_site} - Material Fee"
+            default_memo = f"{project_site} - Labor Fee"
 
         else:
-            # === Moo Housing Inc 模式：退押金专享选项 ===
             company_name = "Moo Housing Inc"
+            
+            project_options = preset_project_list + ["+ 自定义新项目"]
+            selected_proj = st.selectbox("关联房产/项目 (Project)", project_options)
 
-            # 账号选择：8652 / 3738 / Other
+            if selected_proj != "+ 自定义新项目":
+                project_site = selected_proj
+            else:
+                project_site = st.text_input("输入房产名称/地址", value="Moo Housing Property")
+
             account_choice = st.selectbox(
                 "选择付款账号 (Account)",
                 ["ACC-8652", "ACC-3738", "Other (自定义账号)"]
@@ -227,10 +236,8 @@ if mode == "📝 场景一：单张手动生成":
             else:
                 account_num = account_choice
 
-            # 默认 Memo 为 Deposit Refund
             default_memo = "Deposit Refund"
 
-        # ----------------- 通用信息填写 -----------------
         company_display = st.text_input("付款公司名称", value=company_name)
 
         st.markdown("---")
@@ -247,12 +254,13 @@ if mode == "📝 场景一：单张手动生成":
         with c_a:
             pay_date = st.date_input("开票日期", value=date.today())
         with c_b:
+            # === 改为直接自行输入支票号 ===
             check_num = st.number_input(
                 "支票编号 (Check Number)",
                 min_value=1,
-                value=1001,  # 默认起始值，可随意修改
+                value=1001,
                 step=1,
-                help="请在此处直接输入本次开票的支票号码"
+                help="请直接输入本次要开具的支票号码"
             )
 
         memo_text = st.text_input(
@@ -262,7 +270,6 @@ if mode == "📝 场景一：单张手动生成":
 
         st.info(f"🔤 **英文金额大写预览：**\n\n`{amount_words}`")
 
-    # 替换占位符字典
     replacements = {
         "date": pay_date.strftime("%m/%d/%Y"),
         "name": payee_name,
@@ -273,7 +280,6 @@ if mode == "📝 场景一：单张手动生成":
         "account": account_num,
     }
 
-    # 右侧预览与保存
     with col2:
         st.subheader("2. 实时生成与预览")
         filled_pdf = fill_pdf_placeholders(pdf_template_bytes, replacements)
@@ -299,14 +305,6 @@ if mode == "📝 场景一：单张手动生成":
             ]
             save_to_history(record)
 
-            # 更新选定项目的下一张支票号递增状态
-            if selected_proj != "+ 自定义新项目":
-                df_projects.loc[
-                    df_projects["Project_Name"] == selected_proj,
-                    "Next_Check_Number",
-                ] = (check_num + 1)
-                save_project_presets(df_projects)
-
             st.balloons()
             st.success(
                 f"🎉 支票 #{check_num} 已成功生成并写入历史台账！"
@@ -321,11 +319,11 @@ if mode == "📝 场景一：单张手动生成":
             )
 
 # ==============================================================================
-# 场景 2：多项目混合周薪批量开单（支持核对起始号 + 表格自动推算/手动修改支票号）
+# 场景 2：多项目混合周薪批量开单（融入 Default_Role 工种带出）
 # ==============================================================================
 elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     st.title("👷 多项目/施工队周薪批量生成")
-    st.caption("确认各项目起始号后，表格将自动推算支票号；如有特殊跳号可直接在表格中修改。")
+    st.caption("确认各项目起始号后，表格将自动推算支票号；工人工种角色将自动匹配。")
 
     if not pdf_template_bytes:
         st.stop()
@@ -336,10 +334,9 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
     
     # ----------------- 环节 1：确认各项目起始支票号 -----------------
     st.subheader("1. 确认本期各项目起始支票号")
-    st.caption("系统已根据上次记录自动拉取，如有变更（如领了新支票本），请在此处调整：")
 
     proj_start_nums = {}
-    cols = st.columns(min(len(df_projects), 4))  # 动态分列展示
+    cols = st.columns(min(len(df_projects), 4))
     for idx, p_row in df_projects.iterrows():
         p_name = p_row["Project_Name"]
         default_num = int(p_row["Next_Check_Number"])
@@ -353,36 +350,38 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
     st.markdown("---")
 
-    # ----------------- 环节 2：录入发薪明细（自动分配并支持手动改号） -----------------
-    st.subheader("2. 录入发薪明细（支票号已自动分配，支持手动修改）")
+    # ----------------- 环节 2：录入发薪明细 -----------------
+    st.subheader("2. 录入发薪明细（自动读取工人默认工种 Default_Role）")
 
-    # 预设首行数据并自动推算支票号
     default_p1 = preset_project_list[0] if preset_project_list else "123 Main St"
     default_p2 = preset_project_list[1] if len(preset_project_list) > 1 else default_p1
 
-    # 根据顶部确认的起始号，实时初始化首行数据
     p1_start = proj_start_nums.get(default_p1, 1001)
     p2_start = proj_start_nums.get(default_p2, 5001) if default_p2 != default_p1 else p1_start + 1
 
+    w1_name = preset_worker_list[0] if preset_worker_list else ""
+    w2_name = preset_worker_list[1] if len(preset_worker_list) > 1 else ""
+
+    # 读取 worker_role_map 带出工种
     init_data = [
         {
-            "工人姓名 (Payee)": preset_worker_list[0] if preset_worker_list else "",
+            "工人姓名 (Payee)": w1_name,
             "所属项目 (Project)": default_p1,
             "支票编号 (Check #)": int(p1_start),
             "金额 $ (Amount)": 1200.00,
-            "工作备注 (Memo)": "Weekly Work"
+            "工作备注 (Memo)": worker_role_map.get(w1_name, "Weekly Work")
         },
         {
-            "工人姓名 (Payee)": preset_worker_list[1] if len(preset_worker_list) > 1 else "",
+            "工人姓名 (Payee)": w2_name,
             "所属项目 (Project)": default_p2,
             "支票编号 (Check #)": int(p2_start),
             "金额 $ (Amount)": 950.00,
-            "工作备注 (Memo)": "Weekly Work"
+            "工作备注 (Memo)": worker_role_map.get(w2_name, "Weekly Work")
         }
     ]
     df_init = pd.DataFrame(init_data)
 
-    st.info("💡 提示：增加行或切换项目时，请检查/调整【支票编号】列。如果某张支票纸废掉需跳号，直接双击修改数字即可。")
+    st.info("💡 提示：增加行或修改工人时，请检查支票号与工作备注。如果纸质支票废号掉，直接双击修改数字即可。")
 
     df_payroll_input = st.data_editor(
         df_init,
@@ -400,7 +399,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
             ),
             "支票编号 (Check #)": st.column_config.NumberColumn(
                 "支票编号 (Check #)",
-                help="自动推算出的支票号，允许手动修改跳号",
+                help="自动推算的支票号，允许手动修改",
                 required=True,
                 format="%d"
             ),
@@ -418,7 +417,7 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
         if st.button("🚀 确认无误，批量生成支票", type="primary", use_container_width=True):
             generated_pdfs = []
             records_log = []
-            max_check_used = {} # 用于记录每个项目本次用到的最大支票号
+            max_check_used = {}
 
             proj_map = df_projects.set_index("Project_Name").to_dict(orient="index")
 
@@ -444,14 +443,13 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
 
                 full_memo = f"{project_name} - {detail_memo}" if detail_memo else project_name
 
-                # 填充 PDF
                 replacements = {
                     "date": pay_date.strftime("%m/%d/%Y"),
                     "name": worker_name,
                     "amount": f"{amt:,.2f}",
                     "amount_words": number_to_words_usd(amt),
                     "memo": full_memo,
-                    "number": str(cur_check), # 直接取表格中最终确认/手动修改后的支票号
+                    "number": str(cur_check),
                     "account": account_num
                 }
 
@@ -469,23 +467,19 @@ elif mode == "👷 场景二：多项目/施工队周薪批量开单":
                     "Memo": full_memo
                 })
 
-                # 追溯该项目使用的最大支票号，以便更新下一次的起始号
                 if project_name not in max_check_used or cur_check > max_check_used[project_name]:
                     max_check_used[project_name] = cur_check
 
             if generated_pdfs:
-                # 1. 保存流水台账
                 save_to_history(records_log)
 
-                # 2. 将每个项目用到的（最大支票号 + 1）更新回配置文件
                 for p_name, max_num in max_check_used.items():
                     df_projects.loc[df_projects["Project_Name"] == p_name, "Next_Check_Number"] = max_num + 1
                 save_project_presets(df_projects)
 
                 st.balloons()
-                st.success(f"🎉 成功生成 {len(generated_pdfs)} 张支票！各项目下次起始号已自动更新为最大使用号 + 1。")
+                st.success(f"🎉 成功生成 {len(generated_pdfs)} 张支票！")
 
-                # 统计看板与导出区
                 st.markdown("### 📊 本期出账汇总")
                 df_batch = pd.DataFrame(records_log)
                 col_sum1, col_sum2 = st.columns(2)
