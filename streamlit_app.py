@@ -221,24 +221,6 @@ mode = st.sidebar.radio(
     ],
 )
 
-# 侧边栏：凭证诊断扩展面板
-with st.sidebar.expander("🔍 Google Sheets 连接诊断"):
-    has_secrets = "gcp_service_account" in st.secrets
-    has_file = os.path.exists("service_account.json")
-    st.write(f"• Secrets 配置: {'✅ 已检测到' if has_secrets else '❌ 未配置'}")
-    st.write(f"• 本地 JSON 文件: {'✅ 已存在' if has_file else '❌ 未找到'}")
-    
-    if st.button("🧪 测试连通性"):
-        c = get_gspread_client()
-        if c:
-            try:
-                s_name = st.secrets.get("SPREADSHEET_NAME", "Check Issuance History")
-                sh = c.open(s_name)
-                st.success(f"🎉 成功连上云端表格: {sh.title}")
-            except Exception as e:
-                st.error(f"无法打开表格: {e}")
-        else:
-            st.error("无法获取 Service Account 授权。")
 
 if pdf_template_bytes is None:
     st.warning("请先在左侧上传 PDF 模板文件。")
@@ -256,138 +238,128 @@ if mode == "📝 场景一：单张手动生成":
     if not pdf_template_bytes:
         st.stop()
 
-    col1, col2 = st.columns(2)
 
-    with col1:
-        st.subheader("1. 基础信息填报")
+    st.subheader("1. 基础信息填报")
 
-        biz_mode = st.radio(
-            "选择业务主体 (Business Entity)：",
-            ["🏗️ Moo Construction (施工/项目模式)", "🏠 Moo Housing Inc (房屋租赁/退押金模式)"],
-            horizontal=True,
-        )
+    biz_mode = st.radio(
+        "选择业务主体 (Business Entity)：",
+        ["🏗️ Moo Construction (施工/项目模式)", "🏠 Moo Housing Inc (房屋租赁/退押金模式)"],
+        horizontal=True,
+    )
 
-        st.markdown("---")
+    st.markdown("---")
 
-        if "Construction" in biz_mode:
-            company_name = "Moo Construction Inc"
-            
-            project_options = preset_project_list + ["+ 自定义新项目"]
-            selected_proj = st.selectbox("选择工地/项目 (Project)", project_options)
+    if "Construction" in biz_mode:
+        company_name = "Moo Construction Inc"
+        
+        project_options = preset_project_list + ["+ 自定义新项目"]
+        selected_proj = st.selectbox("选择工地/项目 (Project)", project_options)
 
-            if selected_proj != "+ 自定义新项目":
-                p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
-                default_account = p_info["Account"]
-                project_site = selected_proj
-                default_chk_val = latest_check_map.get(selected_proj, 1001)
-            else:
-                project_site = st.text_input("输入新项目名称", value="New Site")
-                default_account = "ACC-8652"
-                default_chk_val = 1001
-
-            account_num = st.text_input("付款账号", value=default_account)
-            default_memo = f"{project_site} - Labor Fee"
-
+        if selected_proj != "+ 自定义新项目":
+            p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
+            default_account = p_info["Account"]
+            project_site = selected_proj
+            default_chk_val = latest_check_map.get(selected_proj, 1001)
         else:
-            company_name = "Moo Housing Inc"
-            
-            project_options = preset_project_list + ["+ 自定义新项目"]
-            selected_proj = st.selectbox("关联房产/项目 (Project)", project_options)
+            project_site = st.text_input("输入新项目名称", value="New Site")
+            default_account = "ACC-8652"
+            default_chk_val = 1001
 
-            if selected_proj != "+ 自定义新项目":
-                project_site = selected_proj
-                default_chk_val = latest_check_map.get(selected_proj, 1001)
-            else:
-                project_site = st.text_input("输入房产名称/地址", value="Moo Housing Property")
-                default_chk_val = 1001
+        account_num = st.text_input("付款账号", value=default_account)
+        default_memo = f"{project_site} - Labor Fee"
 
-            account_choice = st.selectbox(
-                "选择付款账号 (Account)",
-                ["ACC-8652", "ACC-3738", "Other (自定义账号)"]
-            )
+    else:
+        company_name = "Moo Housing Inc"
+        
+        project_options = preset_project_list + ["+ 自定义新项目"]
+        selected_proj = st.selectbox("关联房产/项目 (Project)", project_options)
 
-            if account_choice == "Other (自定义账号)":
-                account_num = st.text_input("输入自定义账号", value="ACC-")
-            else:
-                account_num = account_choice
+        if selected_proj != "+ 自定义新项目":
+            project_site = selected_proj
+            default_chk_val = latest_check_map.get(selected_proj, 1001)
+        else:
+            project_site = st.text_input("输入房产名称/地址", value="Moo Housing Property")
+            default_chk_val = 1001
 
-            default_memo = "Deposit Refund"
-
-        company_display = st.text_input("付款公司名称", value=company_name)
-
-        st.markdown("---")
-
-        payee_name = st.text_input(
-            "收款人 (Payee Name)",
-            value="John Smith",
-        )
-        pay_amount = st.number_input(
-            "金额 $ (Amount)", min_value=0.01, value=1500.00, step=100.0
+        account_choice = st.selectbox(
+            "选择付款账号 (Account)",
+            ["ACC-8652", "ACC-3738", "Other (自定义账号)"]
         )
 
-        c_a, c_b = st.columns(2)
-        with c_a:
-            pay_date = st.date_input("开票日期", value=date.today())
-        with c_b:
-            check_num = st.number_input(
-                "支票编号 (Check Number)",
-                min_value=1,
-                value=int(default_chk_val),
-                step=1,
-                help="系统已从 Google Sheets 读取最新可用编号，可自由更改"
-            )
+        if account_choice == "Other (自定义账号)":
+            account_num = st.text_input("输入自定义账号", value="ACC-")
+        else:
+            account_num = account_choice
 
-        memo_text = st.text_input(
-            "备注 (Memo)", value=default_memo
+        default_memo = "Deposit Refund"
+
+    company_display = st.text_input("付款公司名称", value=company_name)
+
+    st.markdown("---")
+
+    payee_name = st.text_input(
+        "收款人 (Payee Name)",
+        value="John Smith",
+    )
+    pay_amount = st.number_input(
+        "金额 $ (Amount)", min_value=0.01, value=1500.00, step=100.0
+    )
+
+    c_a, c_b = st.columns(2)
+    with c_a:
+        pay_date = st.date_input("开票日期", value=date.today())
+    with c_b:
+        check_num = st.number_input(
+            "支票编号 (Check Number)",
+            min_value=1,
+            value=int(default_chk_val),
+            step=1,
+            help="系统已从 Google Sheets 读取最新可用编号，可自由更改"
         )
-        amount_words = number_to_words_usd(pay_amount)
 
-        st.info(f"🔤 **英文金额大写预览：**\n\n`{amount_words}`")
+    memo_text = st.text_input(
+        "备注 (Memo)", value=default_memo
+    )
+    amount_words = number_to_words_usd(pay_amount)
 
-    replacements = {
-        "date": pay_date.strftime("%m/%d/%Y"),
-        "name": payee_name,
-        "amount": f"{pay_amount:,.2f}",
-        "amount_words": amount_words,
-        "memo": memo_text,
-        "number": str(check_num),
-        "account": account_num,
-    }
+    st.info(f"🔤 **英文金额大写预览：**\n\n`{amount_words}`")
 
-    with col2:
-        st.subheader("2. 实时生成与预览")
-        filled_pdf = fill_pdf_placeholders(pdf_template_bytes, replacements)
+replacements = {
+    "date": pay_date.strftime("%m/%d/%Y"),
+    "name": payee_name,
+    "amount": f"{pay_amount:,.2f}",
+    "amount_words": amount_words,
+    "memo": memo_text,
+    "number": str(check_num),
+    "account": account_num,
+}
 
-        base64_pdf = base64.b64encode(filled_pdf).decode("utf-8")
-        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="480" type="application/pdf"></iframe>'
-        st.markdown(pdf_display, unsafe_allow_html=True)
 
-        st.markdown("<br>", unsafe_allow_html=True)
 
-        if st.button("🚀 确认生成并推送至 Google Sheets", type="primary", use_container_width=True):
-            record = [
-                {
-                    "Check Number": check_num,
-                    "Issue Date": pay_date.strftime("%Y-%m-%d"),
-                    "Company": company_display,
-                    "Account": account_num,
-                    "Project": project_site,
-                    "Payee Name": payee_name,
-                    "Amount": pay_amount,
-                    "Memo": memo_text,
-                }
-            ]
-            if save_to_history(record):
-                st.balloons()
-                st.success(f"🎉 支票 #{check_num} 已成功生成并写入云端 Google Sheets！")
+    if st.button("🚀 确认生成并推送至 Google Sheets", type="primary", use_container_width=True):
+        record = [
+            {
+                "Check Number": check_num,
+                "Issue Date": pay_date.strftime("%Y-%m-%d"),
+                "Company": company_display,
+                "Account": account_num,
+                "Project": project_site,
+                "Payee Name": payee_name,
+                "Amount": pay_amount,
+                "Memo": memo_text,
+            }
+        ]
+        if save_to_history(record):
+            st.balloons()
+            st.success(f"🎉 支票 #{check_num} 已成功生成并写入云端 Google Sheets！")
 
-            st.download_button(
-                label=f"📥 下载支票 PDF (#{check_num})",
-                data=filled_pdf,
-                file_name=f"Check_{check_num}_{payee_name}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
+        st.download_button(
+            label=f"📥 下载支票 PDF (#{check_num})",
+            data=filled_pdf,
+            file_name=f"Check_{check_num}_{payee_name}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
 
 # ==============================================================================
 # 场景 2：多项目/施工队周薪批量开单
