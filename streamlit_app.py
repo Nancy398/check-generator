@@ -248,9 +248,11 @@ if mode == "📝 场景一：单张手动生成":
             pay_date = st.date_input("开票日期", value=date.today())
         with c_b:
             check_num = st.number_input(
-                "支票编号 (自动拉取该项目号段)",
+                "支票编号 (Check Number)",
                 min_value=1,
-                value=default_check_num,
+                value=1001,  # 默认起始值，可随意修改
+                step=1,
+                help="请在此处直接输入本次开票的支票号码"
             )
 
         memo_text = st.text_input(
