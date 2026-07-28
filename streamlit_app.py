@@ -205,15 +205,17 @@ if mode == "📝 场景一：单张/常规即时开单":
         
         # 获取该项目的公司、账号和自动推算的最新支票号
         p_row = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
-        default_next_chk = latest_check_map.get(selected_proj, int(p_row["Next_Check_Number"]))
-
+        
+        # 【修改这里】：如果没有查到，直接保底默认 1001
+        default_next_chk = latest_check_map.get(selected_proj, 1001)
+    
         # 2. 支票号与日期
         c11, c12 = st.columns(2)
         with c11:
             chk_num = st.number_input("支票编号 (Check #)", value=int(default_next_chk), step=1)
         with c12:
             issue_date = st.date_input("开单日期", value=date.today())
-
+    
         # 3. 收款人与金额
         payee = st.selectbox("收款人姓名/单位 (Payee)", preset_worker_list) if preset_worker_list else st.text_input("收款人姓名/单位 (Payee)")
         amount = st.number_input("金额 $ (Amount)", min_value=0.01, value=1500.00, step=100.0)
@@ -221,7 +223,7 @@ if mode == "📝 场景一：单张/常规即时开单":
         # 4. 备注信息
         default_role = worker_role_map.get(payee, "预付材料款/劳务费")
         memo_text = st.text_input("备注/用途 (Memo)", value=default_role)
-
+    
         # 自动关联的公司信息显示
         st.info(f"🏢 **出账公司**: {p_row['Company']} | 💳 **出账账号**: `{p_row['Account']}`")
 
