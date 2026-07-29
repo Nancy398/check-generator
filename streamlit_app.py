@@ -22,7 +22,7 @@ GS_SPREADSHEET_NAME = "Check Issuance History"  # Google 表格的名字
 GS_WORKSHEET_NAME = "Sheet1"                  # 历史记录工作表的名字
 
 # 预设可选账号列表，方便选择
-ACCOUNT_OPTIONS = ["ACC-8652", "ACC-3738", "ACC-1001", "Other"]
+ACCOUNT_OPTIONS = ["Chase-1185", "ACC-8652", "ACC-3738", "ACC-1001", "Other"]
 
 # ----------------- 1. 获取 Authorization 客户端 -----------------
 def get_gc_client():
@@ -281,49 +281,43 @@ if mode == "📝 Single Mannul Check":
 
         biz_mode = st.radio(
             "Business Entity：",
-            ["🏗️ Moo Construction", "🏠 Moo Housing Inc"],
+            ["🏗️ Moo Construction", "🏠 Development Company (Moo Housing)"],
             horizontal=True,
         )
 
         st.markdown("---")
 
-        if "Construction" in biz_mode:
-            company_name = "Moo Construction"
-            project_options = preset_project_list + ["+ New Project"]
-            selected_proj = st.selectbox("Project", project_options)
+        company_is_construction = "Construction" in biz_mode
 
-            if selected_proj != "+ New Project":
-                p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
-                default_account = p_info.get("Account", "ACC-8652")
-                project_site = selected_proj
-                default_chk_val = latest_check_map.get(selected_proj, 1001)
-            else:
-                project_site = st.text_input("Project Name", value="New Site")
-                default_account = "ACC-8652"
-                default_chk_val = 1001
+        # 项目选择
+        project_options = preset_project_list + ["+ New Project"]
+        selected_proj = st.selectbox("Project", project_options)
+
+        if selected_proj != "+ New Project":
+            project_site = selected_proj
+            default_chk_val = latest_check_map.get(selected_proj, 1001)
+            p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
+            project_account = p_info.get("Account", "ACC-8652")
+        else:
+            project_site = st.text_input("Project Name", value="New Site")
+            default_chk_val = 1001
+            project_account = "ACC-8652"
+
+        # ----------------- 核心逻辑判断：Moo Construction 强制指定 Chase-1185 -----------------
+        if company_is_construction:
+            company_name = "Moo Construction"
+            account_num = "Chase-1185"
+            st.info("💡 **Moo Construction** 付款账户已固定为: `Chase-1185`")
         else:
             company_name = "Moo Housing Inc"
-            project_options = preset_project_list + ["+ New Project"]
-            selected_proj = st.selectbox("Project", project_options)
-
-            if selected_proj != "+ New Project":
-                project_site = selected_proj
-                p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
-                default_account = p_info.get("Account", "ACC-8652")
-                default_chk_val = latest_check_map.get(selected_proj, 1001)
+            # 选择 Development Company 时，根据项目自动推导账户，但仍允许修改
+            acc_idx = ACCOUNT_OPTIONS.index(project_account) if project_account in ACCOUNT_OPTIONS else ACCOUNT_OPTIONS.index("Other")
+            account_choice = st.selectbox("Bank Account Choice", ACCOUNT_OPTIONS, index=acc_idx)
+            
+            if account_choice == "Other":
+                account_num = st.text_input("Enter Custom Bank Account", value=project_account)
             else:
-                project_site = st.text_input("Enter Address", value="Moo Housing Property")
-                default_account = "ACC-8652"
-                default_chk_val = 1001
-
-        # ---- 账号输入与自定义下拉 ----
-        acc_idx = ACCOUNT_OPTIONS.index(default_account) if default_account in ACCOUNT_OPTIONS else ACCOUNT_OPTIONS.index("Other")
-        account_choice = st.selectbox("Bank Account Choice", ACCOUNT_OPTIONS, index=acc_idx)
-        
-        if account_choice == "Other":
-            account_num = st.text_input("Enter Custom Bank Account", value="ACC-")
-        else:
-            account_num = account_choice
+                account_num = account_choice
 
         company_display = st.text_input("Company", value=company_name)
 
@@ -475,11 +469,17 @@ elif mode == "👷 Construction Bulk Checks":
             sub_stg = w_info.get("Sub_Stage", "")
             st.session_state.input_m = f"{stg_name} - {sub_stg}" if sub_stg else stg_name
 
-    def update_account_on_project_change():
+    def update_account_and_company():
+        """公司或项目切换时，联动设置 Account"""
+        c_type = st.session_state.get("input_company_type", "Moo Construction")
         selected_p = st.session_state.get("input_p", "")
-        if not df_projects.empty and selected_p in df_projects["Project_Name"].values:
-            p_info = df_projects[df_projects["Project_Name"] == selected_p].iloc[0]
-            st.session_state.input_acc = p_info.get("Account", "ACC-8652")
+
+        if c_type == "Moo Construction":
+            st.session_state.input_acc = "Chase-1185"
+        else:
+            if not df_projects.empty and selected_p in df_projects["Project_Name"].values:
+                p_info = df_projects[df_projects["Project_Name"] == selected_p].iloc[0]
+                st.session_state.input_acc = p_info.get("Account", "ACC-8652")
 
     def calculate_amount_from_days():
         days = st.session_state.get("input_days", 0.0)
@@ -487,12 +487,12 @@ elif mode == "👷 Construction Bulk Checks":
         if days > 0 and rate > 0:
             st.session_state.input_a = round(days * rate, 2)
 
-    # 初始化默认账号
-    if "input_acc" not in st.session_state and preset_project_list:
-        first_p = preset_project_list[0]
-        if not df_projects.empty and first_p in df_projects["Project_Name"].values:
-            p_info = df_projects[df_projects["Project_Name"] == first_p].iloc[0]
-            st.session_state.input_acc = p_info.get("Account", "ACC-8652")
+    # 初始化默认状态
+    if "input_company_type" not in st.session_state:
+        st.session_state.input_company_type = "Moo Construction"
+
+    if "input_acc" not in st.session_state:
+        st.session_state.input_acc = "Chase-1185"
 
     if "input_m" not in st.session_state and preset_worker_list:
         first_w = preset_worker_list[0]
@@ -502,25 +502,35 @@ elif mode == "👷 Construction Bulk Checks":
 
     st.markdown("##### ➕ New Check")
     
-    # 第一行：项目、账号与人员信息
-    r1_c1, r1_c2, r1_c3 = st.columns([1, 1, 1])
+    # 第一行：付款主体、项目、人员与账号
+    r1_c1, r1_c2, r1_c3, r1_c4 = st.columns([1.2, 1, 1, 1])
     with r1_c1:
+        add_comp_type = st.selectbox(
+            "Paying Entity",
+            options=["Moo Construction", "Development Company"],
+            key="input_company_type",
+            on_change=update_account_and_company
+        )
+    with r1_c2:
         add_worker = st.selectbox(
             "Payee Name", 
             preset_worker_list, 
             key="input_w",
             on_change=update_memo_on_worker_change
         )
-    with r1_c2:
+    with r1_c3:
         add_proj = st.selectbox(
             "Project", 
             preset_project_list, 
             key="input_p",
-            on_change=update_account_on_project_change
+            on_change=update_account_and_company
         )
-    with r1_c3:
-        # 在批量界面中新增可选/填账号
-        add_account = st.text_input("Bank Account", key="input_acc", help="默认按项目填充，可手动修改")
+    with r1_c4:
+        add_account = st.text_input(
+            "Bank Account", 
+            key="input_acc", 
+            help="Moo Construction 固定为 Chase-1185；Development Company 按项目获取"
+        )
 
     # 查找工人的默认 Stage 配置用于联动定位
     w_stg, w_stg_name, w_sub_stg = "", "", ""
@@ -578,9 +588,10 @@ elif mode == "👷 Construction Bulk Checks":
             stage_val_str = f"{st_code} ({f'{sub1}, {sub2}' if sub2 else sub1})" if st_code else ""
 
             st.session_state.payroll_list.append({
+                "Company": add_comp_type,
                 "Payee": add_worker,
                 "Project": add_proj,
-                "Account": add_account,  # 保存指定的账号
+                "Account": add_account,  # 保存 Chase-1185 或项目读取的账户
                 "Stage": stage_val_str,
                 "Days": add_days if add_days > 0 else None,
                 "Rate": add_rate if add_rate > 0 else None,
@@ -604,9 +615,10 @@ elif mode == "👷 Construction Bulk Checks":
             use_container_width=True,
             key="payroll_table_editor",
             column_config={
+                "Company": st.column_config.SelectboxColumn("Company", options=["Moo Construction", "Development Company"]),
                 "Payee": st.column_config.SelectboxColumn("Payee", options=preset_worker_list),
                 "Project": st.column_config.SelectboxColumn("Project", options=preset_project_list),
-                "Account": st.column_config.TextColumn("Account"),  # 允许在表格中直接修改账号
+                "Account": st.column_config.TextColumn("Account"),  # 允许修改
                 "Stage": st.column_config.TextColumn("Stage"),
                 "Days": st.column_config.NumberColumn("Days", format="%.1f days"),
                 "Rate": st.column_config.NumberColumn("Rate/Day", format="$%.2f"),
@@ -653,11 +665,14 @@ elif mode == "👷 Construction Bulk Checks":
                 if amt <= 0 or not worker_name or cur_check <= 0:
                     continue
 
-                p_info = proj_map.get(project_name, {"Company": "Moo Construction", "Account": "ACC-8652"})
-                company_name = p_info["Company"]
+                company_name = str(row.get("Company", "Moo Construction")).strip()
+                p_info = proj_map.get(project_name, {"Account": "ACC-8652"})
                 
-                # 优先提取行内用户填写的 Account，若无则使用项目默认 Account
-                account_num = str(row.get("Account", "")).strip() or p_info["Account"]
+                # 优先级：若为 Moo Construction 强制 Chase-1185，否则取行内的 Account，若空则取项目默认 Account
+                if company_name == "Moo Construction":
+                    account_num = "Chase-1185"
+                else:
+                    account_num = str(row.get("Account", "")).strip() or p_info.get("Account", "ACC-8652")
 
                 # 组合 Memo 文本: Project_Name - Detail_Memo
                 if project_name and detail_memo:
