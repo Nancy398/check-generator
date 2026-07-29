@@ -338,7 +338,7 @@ if mode == "📝 Single Mannul Check":
             def_sub_stg = w_info.get("Sub_Stage", "")
 
         # 调整为：Stage_Name - Sub_Stage
-        default_memo_text = f"{def_stg_name} - {def_sub_stg}" if def_sub_stg else def_stg_name
+        default_memo_text = f"{def_stg_name} - {def_sub_stg}"
 
         st.markdown("##### 🏗️ 工程阶段 (Stage Selection)")
         st_code, st_name, sub1, sub2 = render_stage_selector(
