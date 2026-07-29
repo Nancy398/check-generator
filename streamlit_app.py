@@ -337,8 +337,8 @@ if mode == "📝 Single Mannul Check":
             def_stg_name = w_info.get("Stage_Name", "")
             def_sub_stg = w_info.get("Sub_Stage", "")
 
-        # 预设默认 Memo
-        default_memo_text = f"{def_sub_stg} - {def_stg_name}" if def_sub_stg else def_stg_name
+        # 调整为：Stage_Name - Sub_Stage
+        default_memo_text = f"{def_stg_name} - {def_sub_stg}" if def_sub_stg else def_stg_name
 
         st.markdown("##### 🏗️ 工程阶段 (Stage Selection)")
         st_code, st_name, sub1, sub2 = render_stage_selector(
@@ -467,14 +467,14 @@ elif mode == "👷 Construction Bulk Checks":
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
 
-    # 更换 Worker 时自动同步该工人的默认活计 Memo
+    # 更换 Worker 时自动同步该工人的默认活计 Memo (调整为 Stage_Name - Sub_Stage)
     def update_memo_on_worker_change():
         selected_w = st.session_state.get("input_w", "")
         if not df_workers.empty and selected_w in df_workers["Worker_Name"].values:
             w_info = df_workers[df_workers["Worker_Name"] == selected_w].iloc[0]
             stg_name = w_info.get("Stage_Name", "")
             sub_stg = w_info.get("Sub_Stage", "")
-            st.session_state.input_m = f"{sub_stg} - {stg_name}" if sub_stg else stg_name
+            st.session_state.input_m = f"{stg_name} - {sub_stg}" if sub_stg else stg_name
 
     def calculate_amount_from_days():
         days = st.session_state.get("input_days", 0.0)
@@ -482,12 +482,12 @@ elif mode == "👷 Construction Bulk Checks":
         if days > 0 and rate > 0:
             st.session_state.input_a = round(days * rate, 2)
 
-    # 初始化默认 Worker 与 Memo
+    # 初始化默认 Worker 与 Memo (调整为 Stage_Name - Sub_Stage)
     if "input_m" not in st.session_state and preset_worker_list:
         first_w = preset_worker_list[0]
         if not df_workers.empty and first_w in df_workers["Worker_Name"].values:
             w_info = df_workers[df_workers["Worker_Name"] == first_w].iloc[0]
-            st.session_state.input_m = f"{w_info.get('Sub_Stage', '')} - {w_info.get('Stage_Name', '')}"
+            st.session_state.input_m = f"{w_info.get('Stage_Name', '')} - {w_info.get('Sub_Stage', '')}"
 
     st.markdown("##### ➕ New Check")
     
