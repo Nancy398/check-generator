@@ -507,7 +507,7 @@ elif mode == "👷 Construction Bulk Checks":
     with r1_c1:
         add_comp_type = st.selectbox(
             "Paying Entity",
-            options=["Moo Construction", "Development Company"],
+            options=["Development Company", "Moo Construction"],
             key="input_company_type",
             on_change=update_account_and_company
         )
