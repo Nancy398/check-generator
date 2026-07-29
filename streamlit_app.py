@@ -455,25 +455,27 @@ elif mode == "👷 Construction Bulk Checks":
         default_first_worker = preset_worker_list[0] if preset_worker_list else ""
         st.session_state.input_m = worker_role_map.get(default_first_worker, "")
 
-    # --- 2. 快捷添加面板 ---
+# --- 快捷添加面板（两行布局） ---
     st.markdown("##### ➕ New Check")
-    # 适当调整列宽，容纳 Days 和 Daily Rate
-    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.8, 1.8, 1.5, 1.2, 1.2, 1.5, 1.5, 1.0])
-
-    with c1:
+    
+    # 第一行：项目与人员基本信息
+    r1_c1, r1_c2, r1_c3 = st.columns([3, 3, 3])
+    with r1_c1:
         add_worker = st.selectbox(
-            "Payee", 
+            "Payee Name", 
             preset_worker_list, 
             key="input_w",
             on_change=update_memo_on_worker_change
         )
-    with c2:
+    with r1_c2:
         add_proj = st.selectbox("Project", preset_project_list, key="input_p")
-    with c3:
+    with r1_c3:
         add_stage = st.selectbox("Stage", PRESET_STAGES, key="input_s")
         stage_val = add_stage.split(":")[0].strip()
-    with c4:
-        # 可选：工作天数 (Days)
+
+    # 第二行：金额计算、Memo 与提交按钮
+    r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns([1.5, 1.5, 2.0, 3.0, 1.2])
+    with r2_c1:
         add_days = st.number_input(
             "Days (Opt)", 
             min_value=0.0, 
@@ -481,10 +483,9 @@ elif mode == "👷 Construction Bulk Checks":
             step=0.5, 
             key="input_days",
             on_change=calculate_amount_from_days,
-            help="可选：填入天数与日薪将自动计算总 Amount"
+            help="可选：填入天数与日薪将自动计算 Amount"
         )
-    with c5:
-        # 可选：日薪 (Daily Rate)
+    with r2_c2:
         add_rate = st.number_input(
             "Rate/Day (Opt)", 
             min_value=0.0, 
@@ -492,14 +493,13 @@ elif mode == "👷 Construction Bulk Checks":
             step=10.0, 
             key="input_rate",
             on_change=calculate_amount_from_days,
-            help="可选：填入天数与日薪将自动计算总 Amount"
+            help="可选：填入天数与日薪将自动计算 Amount"
         )
-    with c6:
-        # 总金额：如果填了 Days 和 Rate 会自动计算，也可直接手动输入
-        add_amt = st.number_input("Amount", min_value=0.01, value=1200.00, step=50.0, key="input_a")
-    with c7:
-        add_memo = st.text_input("Memo", key="input_m")
-    with c8:
+    with r2_c3:
+        add_amt = st.number_input("Total Amount", min_value=0.01, value=1200.00, step=50.0, key="input_a")
+    with r2_c4:
+        add_memo = st.text_input("Memo Detail", key="input_m")
+    with r2_c5:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("➕ Add", type="primary", use_container_width=True):
             existing_checks = [
