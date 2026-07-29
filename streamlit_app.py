@@ -628,7 +628,6 @@ elif mode == "👷 Construction Bulk Checks":
                     cur_check = 0
                     amt = 0.0
     
-                # 直接提取 detail_memo，不再叠加项目名和 Stage 前缀
                 detail_memo = str(row.get("Memo", "")).strip()
     
                 if amt <= 0 or not worker_name or cur_check <= 0:
@@ -638,8 +637,13 @@ elif mode == "👷 Construction Bulk Checks":
                 company_name = p_info["Company"]
                 account_num = p_info["Account"]
     
-                # Memo 仅保留详情文本
-                full_memo = detail_memo
+                # 只组合 Project 和 Detail Memo (不加 Stage 标签)
+                if project_name and detail_memo:
+                    full_memo = f"{project_name} - {detail_memo}"
+                elif project_name:
+                    full_memo = project_name
+                else:
+                    full_memo = detail_memo
     
                 replacements = {
                     "date": pay_date.strftime("%m/%d/%Y"),
