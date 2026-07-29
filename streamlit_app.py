@@ -297,10 +297,12 @@ if mode == "📝 Single Mannul Check":
                 default_chk_val = latest_check_map.get(selected_proj, 1001)
                 p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
                 project_account = str(p_info.get("Account", "ACC-8652")).strip()
+                project_company = str(p_info.get("Company", "Development Company")).strip()
             else:
                 project_site = st.text_input("Project Name", value="New Site")
                 default_chk_val = 1001
                 project_account = "ACC-8652"
+                project_company = "Development Company"
 
             # 选择 Payer Entity
             payer_entity = st.selectbox(
@@ -310,15 +312,15 @@ if mode == "📝 Single Mannul Check":
                 help="选择付款主体"
             )
 
-            # 根据 Payer Entity 绑定账号，不用选择
+            # 根据 Payer Entity 绑定账号与公司
             if payer_entity == "Moo Construction":
                 company_name = "Moo Construction"
                 account_num = "Chase-1185"
                 st.info("💡 **Moo Construction** 付款账户已自动固定为: `Chase-1185`")
-            else:  # Development Company
-                company_name = "Development Company"
+            else:  # Development Company -> 获取项目对应关联的真正公司名
+                company_name = project_company
                 account_num = project_account
-                st.info(f"💡 **Development Company** 已自动使用项目对应的账户: `{account_num}`")
+                st.info(f"💡 **Development Company** 已自动使用项目对应的公司 (`{company_name}`) 与账户 (`{account_num}`)")
 
             # Construction 收款人（提供：选择列表 vs 手动输入 两种方式）
             payee_mode = st.radio(
@@ -510,7 +512,7 @@ elif mode == "👷 Construction Bulk Checks":
             st.session_state.input_acc = "Chase-1185"
         elif c_type == "Moo Housing":
             st.session_state.input_acc = "ACC-8652"
-        else:
+        else: # Development Company 对应获取 Project 里的账号
             if not df_projects.empty and selected_p in df_projects["Project_Name"].values:
                 p_info = df_projects[df_projects["Project_Name"] == selected_p].iloc[0]
                 st.session_state.input_acc = str(p_info.get("Account", "ACC-8652")).strip()
@@ -619,8 +621,18 @@ elif mode == "👷 Construction Bulk Checks":
 
             stage_val_str = f"{st_code} ({f'{sub1}, {sub2}' if sub2 else sub1})" if st_code else ""
 
+            # 联动计算真正的 Company Name
+            if add_comp_type == "Development Company":
+                if not df_projects.empty and add_proj in df_projects["Project_Name"].values:
+                    p_row_info = df_projects[df_projects["Project_Name"] == add_proj].iloc[0]
+                    final_company_val = str(p_row_info.get("Company", "Development Company")).strip()
+                else:
+                    final_company_val = "Development Company"
+            else:
+                final_company_val = add_comp_type
+
             st.session_state.payroll_list.append({
-                "Company": add_comp_type,
+                "Company": final_company_val,
                 "Payee": add_worker,
                 "Project": add_proj,
                 "Account": add_account,
@@ -647,7 +659,7 @@ elif mode == "👷 Construction Bulk Checks":
             use_container_width=True,
             key="payroll_table_editor",
             column_config={
-                "Company": st.column_config.SelectboxColumn("Company", options=["Development Company", "Moo Housing", "Moo Construction"]),
+                "Company": st.column_config.TextColumn("Company"),
                 "Payee": st.column_config.SelectboxColumn("Payee", options=preset_worker_list),
                 "Project": st.column_config.SelectboxColumn("Project", options=preset_project_list),
                 "Account": st.column_config.TextColumn("Account"),
@@ -697,8 +709,11 @@ elif mode == "👷 Construction Bulk Checks":
                 if amt <= 0 or not worker_name or cur_check <= 0:
                     continue
 
-                company_name = str(row.get("Company", "Development Company")).strip()
-                p_info = proj_map.get(project_name, {"Account": "ACC-8652"})
+                p_info = proj_map.get(project_name, {"Account": "ACC-8652", "Company": "Development Company"})
+                
+                company_name = str(row.get("Company", "")).strip()
+                if not company_name or company_name == "Development Company":
+                    company_name = str(p_info.get("Company", "Development Company")).strip()
                 
                 if company_name == "Moo Construction":
                     account_num = "Chase-1185"
