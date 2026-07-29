@@ -432,23 +432,33 @@ elif mode == "👷 Construction Bulk Checks":
 
     st.markdown("---")
 
-    # ----------------- 2. 初始化发薪数据列表 -----------------
-    st.subheader("2.Information")
+   # ----------------- 2. 初始化发薪数据列表 -----------------
+    st.subheader("2. Information")
 
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
 
+    # --- 1. 回调函数定义 ---
+    # 更换 Worker 时自动填充默认角色 Memo
     def update_memo_on_worker_change():
         selected_w = st.session_state.input_w
         st.session_state.input_m = worker_role_map.get(selected_w, "")
+
+    # 输入 Days 或 Rate 时自动算总 Amount (Days * Rate)
+    def calculate_amount_from_days():
+        days = st.session_state.get("input_days", 0.0)
+        rate = st.session_state.get("input_rate", 0.0)
+        if days > 0 and rate > 0:
+            st.session_state.input_a = round(days * rate, 2)
 
     if "input_m" not in st.session_state:
         default_first_worker = preset_worker_list[0] if preset_worker_list else ""
         st.session_state.input_m = worker_role_map.get(default_first_worker, "")
 
-    # --- 快捷添加面板 ---
+    # --- 2. 快捷添加面板 ---
     st.markdown("##### ➕ New Check")
-    c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 2, 1.5, 2, 1.2])
+    # 适当调整列宽，容纳 Days 和 Daily Rate
+    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.8, 1.8, 1.5, 1.2, 1.2, 1.5, 1.5, 1.0])
 
     with c1:
         add_worker = st.selectbox(
@@ -463,10 +473,33 @@ elif mode == "👷 Construction Bulk Checks":
         add_stage = st.selectbox("Stage", PRESET_STAGES, key="input_s")
         stage_val = add_stage.split(":")[0].strip()
     with c4:
-        add_amt = st.number_input("Amount", min_value=0.01, value=1200.00, step=50.0, key="input_a")
+        # 可选：工作天数 (Days)
+        add_days = st.number_input(
+            "Days (Opt)", 
+            min_value=0.0, 
+            value=0.0, 
+            step=0.5, 
+            key="input_days",
+            on_change=calculate_amount_from_days,
+            help="可选：填入天数与日薪将自动计算总 Amount"
+        )
     with c5:
-        add_memo = st.text_input("Memo", key="input_m")
+        # 可选：日薪 (Daily Rate)
+        add_rate = st.number_input(
+            "Rate/Day (Opt)", 
+            min_value=0.0, 
+            value=0.0, 
+            step=10.0, 
+            key="input_rate",
+            on_change=calculate_amount_from_days,
+            help="可选：填入天数与日薪将自动计算总 Amount"
+        )
     with c6:
+        # 总金额：如果填了 Days 和 Rate 会自动计算，也可直接手动输入
+        add_amt = st.number_input("Amount", min_value=0.01, value=1200.00, step=50.0, key="input_a")
+    with c7:
+        add_memo = st.text_input("Memo", key="input_m")
+    with c8:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("➕ Add", type="primary", use_container_width=True):
             existing_checks = [
@@ -484,6 +517,8 @@ elif mode == "👷 Construction Bulk Checks":
                 "Payee": add_worker,
                 "Project": add_proj,
                 "Stage": stage_val,
+                "Days": add_days if add_days > 0 else None,
+                "Rate": add_rate if add_rate > 0 else None,
                 "Check #": int(next_chk),
                 "Amount": add_amt,
                 "Memo": add_memo
@@ -492,7 +527,7 @@ elif mode == "👷 Construction Bulk Checks":
 
     st.markdown("---")
 
-    # --- 数据列表展示 ---
+    # --- 3. 数据列表展示 ---
     if st.session_state.payroll_list:
         st.markdown(f"##### 📋 List of Pending Checks ({len(st.session_state.payroll_list)} total):")
         
@@ -507,6 +542,8 @@ elif mode == "👷 Construction Bulk Checks":
                 "Payee": st.column_config.SelectboxColumn("Payee", options=preset_worker_list),
                 "Project": st.column_config.SelectboxColumn("Project", options=preset_project_list),
                 "Stage": st.column_config.TextColumn("Stage"),
+                "Days": st.column_config.NumberColumn("Days", format="%.1f days"),
+                "Rate": st.column_config.NumberColumn("Rate/Day", format="$%.2f"),
                 "Check #": st.column_config.NumberColumn("Check #", format="%d"),
                 "Amount": st.column_config.NumberColumn("Amount", format="$%.2f")
             }
@@ -524,7 +561,6 @@ elif mode == "👷 Construction Bulk Checks":
         df_payroll_input = pd.DataFrame()
 
     st.markdown("---")
-
     # ----------------- 3. 批量生成与导出 -----------------
     if not df_payroll_input.empty:
         if st.button(f"🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks", type="primary", use_container_width=True):
