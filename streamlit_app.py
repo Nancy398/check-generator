@@ -284,6 +284,8 @@ if mode == "📝 Single Mannul Check":
 
         st.markdown("---")
 
+        def_stg, def_stg_name, def_sub_stg = "", "", ""
+
         # 分支 1：Construction 逻辑
         if main_category == "🏗️ Construction":
             # 选择项目
@@ -318,7 +320,16 @@ if mode == "📝 Single Mannul Check":
                 account_num = project_account
                 st.info(f"💡 **Development Company** 已自动使用项目对应的账户: `{account_num}`")
 
-        # 分支 2：Moo Housing 逻辑 (不用选择 Project)
+            # Construction 收款人（从工人预设列表中选择）
+            payee_name = st.selectbox("Payee Name", options=preset_worker_list) if preset_worker_list else st.text_input("Payee Name", value="John Smith")
+
+            if not df_workers.empty and payee_name in df_workers["Worker_Name"].values:
+                w_info = df_workers[df_workers["Worker_Name"] == payee_name].iloc[0]
+                def_stg = w_info.get("Stage", "")
+                def_stg_name = w_info.get("Stage_Name", "")
+                def_sub_stg = w_info.get("Sub_Stage", "")
+
+        # 分支 2：Moo Housing 逻辑 (不用选择 Project，Payee Name 手动输入)
         else:
             payer_entity = "Moo Housing"
             company_name = "Moo Housing Inc"
@@ -332,19 +343,12 @@ if mode == "📝 Single Mannul Check":
             else:
                 account_num = acc_choice
 
+            # Moo Housing 手动输入 Payee Name
+            payee_name = st.text_input("Payee Name", value="", placeholder="Enter payee full name")
+
         company_display = st.text_input("Company Display Name", value=company_name)
 
         st.markdown("---")
-
-        # 收款人设置
-        payee_name = st.selectbox("Payee Name", options=preset_worker_list) if preset_worker_list else st.text_input("Payee Name", value="John Smith")
-
-        def_stg, def_stg_name, def_sub_stg = "", "", ""
-        if not df_workers.empty and payee_name in df_workers["Worker_Name"].values:
-            w_info = df_workers[df_workers["Worker_Name"] == payee_name].iloc[0]
-            def_stg = w_info.get("Stage", "")
-            def_stg_name = w_info.get("Stage_Name", "")
-            def_sub_stg = w_info.get("Sub_Stage", "")
 
         # Memo 与 Stage 的针对性设置
         if main_category == "🏠 Moo Housing":
