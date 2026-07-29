@@ -10,18 +10,16 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 
+# ----------------- 页面配置 -----------------
 st.set_page_config(
     page_title="Check Generator System", page_icon="🧾", layout="wide"
 )
 
 # ----------------- 配置文件与路径定义 -----------------
 DEFAULT_TEMPLATE_PATH = "check_run.pdf"
-PROJECTS_CSV = "projects_config.csv"
-WORKERS_CSV = "workers_config.csv"
 
 GS_SPREADSHEET_NAME = "Check Issuance History"  # Google 表格的名字
-GS_WORKSHEET_NAME = "Sheet1"                  # 工作表的名字
-
+GS_WORKSHEET_NAME = "Sheet1"                  # 历史记录工作表的名字
 
 # ----------------- 1. 获取 Authorization 客户端 -----------------
 def get_gc_client():
@@ -38,23 +36,28 @@ def get_gc_client():
 
 # ----------------- 2. 读取 Google Sheets -----------------
 def read_file(name, sheet):
-    gc = get_gc_client()
-    worksheet = gc.open(name).worksheet(sheet)
-    rows = worksheet.get_all_values()
-    if not rows or len(rows) <= 1:
+    try:
+        gc = get_gc_client()
+        worksheet = gc.open(name).worksheet(sheet)
+        rows = worksheet.get_all_values()
+        if not rows or len(rows) <= 1:
+            return pd.DataFrame()
+        df = pd.DataFrame.from_records(rows)
+        df = pd.DataFrame(df.values[1:], columns=df.iloc[0])
+        # 清除列名两端空格
+        df.columns = df.columns.str.strip()
+        return df
+    except Exception as e:
+        st.error(f"❌ 读取 Google Sheets ({sheet}) 失败: {e}")
         return pd.DataFrame()
-    df = pd.DataFrame.from_records(rows)
-    df = pd.DataFrame(df.values[1:], columns=df.iloc[0])
-    return df
 
 # ----------------- 3. 保存写入 Google Sheets -----------------
 def save_to_history(records):
-    """把生成的支票记录直接追加保存到 Google Sheets 中 (已增加 Stage 字段)"""
+    """把生成的支票记录直接追加保存到 Google Sheets 中"""
     try:
         gc = get_gc_client()
         worksheet = gc.open(GS_SPREADSHEET_NAME).worksheet(GS_WORKSHEET_NAME)
         
-        # 将记录字典转换为对应的表格行数据列表
         rows_to_append = []
         for r in records:
             rows_to_append.append([
@@ -63,21 +66,19 @@ def save_to_history(records):
                 r["Company"],
                 r["Account"],
                 r["Project"],
-                r.get("Stage", ""),  # 包含 Stage 字段
+                r.get("Stage", ""),
                 r["Payee Name"],
                 r["Amount"],
                 r["Memo"]
             ])
-        # 使用 gspread 的 append_rows 实现云端保存
         worksheet.append_rows(rows_to_append)
         return True
     except Exception as e:
         st.error(f"❌ 数据保存至 Google Sheets 失败: {e}")
         return False
 
-# ----------------- 4. 读取云端表格并计算最新可用支票号 -----------------
+# ----------------- 4. 计算最新可用支票号 -----------------
 def fetch_next_check_numbers_from_gs(df_p_list, default_start_number=1001):
-    """计算各个项目最新的 Check Number (+1)"""
     next_numbers = {}
     try:
         df_gs = read_file(GS_SPREADSHEET_NAME, GS_WORKSHEET_NAME)
@@ -91,124 +92,108 @@ def fetch_next_check_numbers_from_gs(df_p_list, default_start_number=1001):
     except Exception as e:
         st.sidebar.warning(f"⚠️ 读取云端历史推算支票号失败，将使用默认起始号。({e})")
 
-    # 兜底默认值
     for p_name in df_p_list:
         if p_name not in next_numbers:
             next_numbers[p_name] = default_start_number
             
     return next_numbers
 
-@st.cache_data(ttl=60)  # 缓存 60 秒，避免频繁刷新页面导致 Google API 限流
+# ----------------- 5. 数据预设加载函数 -----------------
+@st.cache_data(ttl=60)
 def load_project_presets():
-    """从 Google Sheets 的 'Project' 工作表读取公司与项目配置"""
-    try:
-        df_p = read_file(GS_SPREADSHEET_NAME, "Project")
-        if df_p.empty or "Project_Name" not in df_p.columns:
-            st.warning("⚠️ Google Sheets 中 'Project' 表格为空或缺失 'Project_Name' 列！")
-            return pd.DataFrame(columns=["Project_Name", "Company", "Account"])
-        return df_p
-    except Exception as e:
-        st.error(f"❌ 读取 Google Sheets 的 'Project' 表失败: {e}")
+    df_p = read_file(GS_SPREADSHEET_NAME, "Project")
+    if df_p.empty or "Project_Name" not in df_p.columns:
+        st.warning("⚠️ Google Sheets 中 'Project' 表格为空或缺失 'Project_Name' 列！")
         return pd.DataFrame(columns=["Project_Name", "Company", "Account"])
+    return df_p
 
 @st.cache_data(ttl=60)
 def load_worker_presets():
-    """从 Google Sheets 的 'Worker' 工作表读取工人及默认岗位"""
-    try:
-        df_w = read_file(GS_SPREADSHEET_NAME, "Worker")
-        if df_w.empty or "Worker_Name" not in df_w.columns:
-            st.warning("⚠️ Google Sheets 中 'Worker' 表格为空或缺失 'Worker_Name' 列！")
-            return pd.DataFrame(columns=["Worker_Name", "Default_Role"])
-        
-        if "Default_Role" not in df_w.columns:
-            df_w["Default_Role"] = "Worker"
-            
-        return df_w
-    except Exception as e:
-        st.error(f"❌ 读取 Google Sheets 的 'Worker' 表失败: {e}")
-        return pd.DataFrame(columns=["Worker_Name", "Default_Role"])
+    """读取 Worker 表格，提取 Worker_Name, Stage, Stage_Name, Sub_Stage"""
+    df_w = read_file(GS_SPREADSHEET_NAME, "Worker")
+    required_cols = {"Worker_Name", "Stage", "Stage_Name", "Sub_Stage"}
+    if df_w.empty or not required_cols.issubset(df_w.columns):
+        st.warning("⚠️ Worker 表格为空或缺失 'Worker_Name', 'Stage', 'Stage_Name', 'Sub_Stage' 列！")
+        return pd.DataFrame(columns=["Worker_Name", "Stage", "Stage_Name", "Sub_Stage"])
+    return df_w
 
-df_projects = load_project_presets()
-df_workers = load_worker_presets()
-worker_role_map = dict(zip(df_workers["Worker_Name"], df_workers["Default_Role"]))
-preset_worker_list = df_workers["Worker_Name"].dropna().tolist()
-preset_project_list = df_projects["Project_Name"].dropna().tolist()
 @st.cache_data(ttl=60)
 def load_stage_presets():
-    """从 Google Sheets 读取 Stage 配置"""
-    try:
-        df_s = read_file(GS_SPREADSHEET_NAME, "Stage")
-        # 清理列名空格，防止格式误匹配
-        df_s.columns = df_s.columns.str.strip()
-        
-        required_cols = {"Stage", "Stage_Name", "Sub_Stage"}
-        if df_s.empty or not required_cols.issubset(df_s.columns):
-            st.warning("⚠️ Stage 表格为空或缺少 'Stage', 'Stage_Name', 'Sub_Stage' 列！")
-            return pd.DataFrame(columns=["Stage", "Stage_Name", "Sub_Stage"])
-            
-        return df_s
-    except Exception as e:
-        st.error(f"❌ 读取 Google Sheets 的 'Stage' 表失败: {e}")
+    """读取 Stage 表格配置"""
+    df_s = read_file(GS_SPREADSHEET_NAME, "Stage")
+    required_cols = {"Stage", "Stage_Name", "Sub_Stage"}
+    if df_s.empty or not required_cols.issubset(df_s.columns):
+        st.warning("⚠️ Stage 表格为空或缺少 'Stage', 'Stage_Name', 'Sub_Stage' 列！")
         return pd.DataFrame(columns=["Stage", "Stage_Name", "Sub_Stage"])
+    return df_s
 
-# 加载数据
+# 加载云端预设数据
+df_projects = load_project_presets()
+df_workers = load_worker_presets()
 df_stages = load_stage_presets()
 
-# ----------------- 2. 界面展示与联动逻辑 -----------------
-if not df_stages.empty:
-    st.subheader("🏗️ 工程分类选择 (Stage)")
+preset_worker_list = df_workers["Worker_Name"].dropna().tolist() if not df_workers.empty else []
+preset_project_list = df_projects["Project_Name"].dropna().tolist() if not df_projects.empty else []
 
-    # 组合 Stage 代码与名称，便于下拉框展示，例："Stage - 1: Pre-construction & Demo"
-    df_stages["Display_Stage"] = df_stages["Stage"] + ": " + df_stages["Stage_Name"]
-    
-    # 提取所有独特的大类列表
-    unique_stages = df_stages["Display_Stage"].unique().tolist()
+latest_check_map = fetch_next_check_numbers_from_gs(preset_project_list)
 
-    # ---- 步骤 1：选择大类 (Stage) ----
-    selected_stage_display = st.selectbox(
-        "1. 选择工程大类 (Stage)",
-        options=unique_stages,
-        index=0
-    )
+# ----------------- 通用 Stage 联动选择组件 -----------------
+def render_stage_selector(key_prefix="default", default_stage="", default_stage_name="", default_sub_stage=""):
+    """
+    嵌入式的 Stage 三级联动选择组件
+    返回: (selected_stage_code, selected_stage_name, sub_stage_1, sub_stage_2)
+    """
+    if df_stages.empty:
+        st.warning("Stage 配置数据为空")
+        return "", "", "", None
 
-    # 根据选中的大类，筛选出对应的全部 Sub_Stage 选项
-    filtered_df = df_stages[df_stages["Display_Stage"] == selected_stage_display]
+    # 构造显示的选项：例 "Stage - 1: Pre-construction & Demo"
+    df_stages_temp = df_stages.copy()
+    df_stages_temp["Display_Stage"] = df_stages_temp["Stage"] + ": " + df_stages_temp["Stage_Name"]
+    unique_stages = df_stages_temp["Display_Stage"].unique().tolist()
+
+    # 寻找默认 Stage 的索引位置
+    target_display = f"{default_stage}: {default_stage_name}"
+    stage_idx = unique_stages.index(target_display) if target_display in unique_stages else 0
+
+    col_s1, col_s2, col_s3 = st.columns([2, 2, 2])
+
+    with col_s1:
+        selected_stage_display = st.selectbox(
+            "Stage (主阶段)",
+            options=unique_stages,
+            index=stage_idx,
+            key=f"{key_prefix}_main_stage"
+        )
+
+    # 筛选子类别
+    filtered_df = df_stages_temp[df_stages_temp["Display_Stage"] == selected_stage_display]
     sub_stage_options = filtered_df["Sub_Stage"].dropna().tolist()
 
-    # ---- 步骤 2：自动弹出第一个 Sub_Stage ----
-    sub_stage_1 = st.selectbox(
-        f"2. 选择【{selected_stage_display}】下的具体分类 (Sub-Stage 1)",
-        options=sub_stage_options,
-        index=0
-    )
+    sub1_idx = sub_stage_options.index(default_sub_stage) if default_sub_stage in sub_stage_options else 0
 
-    # ---- 步骤 3：可选 (Optional) 选择第二个 Sub_Stage ----
-    # 排除第一步已选中的项目，防止重复选择
-    remaining_sub_options = ["None (无)"] + [item for item in sub_stage_options if item != sub_stage_1]
+    with col_s2:
+        sub_stage_1 = st.selectbox(
+            "Sub-Stage 1 (必选)",
+            options=sub_stage_options,
+            index=sub1_idx,
+            key=f"{key_prefix}_sub_stage_1"
+        )
 
-    sub_stage_2 = st.selectbox(
-        "3. (可选) 选择第二个子分类 (Sub-Stage 2 - Optional)",
-        options=remaining_sub_options,
-        index=0
-    )
+    with col_s3:
+        remaining_options = ["None (无)"] + [item for item in sub_stage_options if item != sub_stage_1]
+        sub_stage_2 = st.selectbox(
+            "Sub-Stage 2 (可选)",
+            options=remaining_options,
+            index=0,
+            key=f"{key_prefix}_sub_stage_2"
+        )
 
-    # ---- 提取最终需要保存的数据 ----
     selected_stage_code = filtered_df["Stage"].iloc[0]
     selected_stage_name = filtered_df["Stage_Name"].iloc[0]
+    opt_sub_stage_2 = sub_stage_2 if sub_stage_2 != "None (无)" else None
 
-    selected_sub_stages = [sub_stage_1]
-    if sub_stage_2 != "None (无)":
-        selected_sub_stages.append(sub_stage_2)
-
-    # ---- 结果展示/确认 ----
-    st.success(
-        f"📌 **选中的 Stage**：`{selected_stage_code}` - `{selected_stage_name}`\n\n"
-        f"🛠️ **选中的 Sub-Stage**：`{', '.join(selected_sub_stages)}`"
-    )
-
-
-# 每次刷新页面实时从 Google Sheets 提取最新支票号
-latest_check_map = fetch_next_check_numbers_from_gs(preset_project_list)
+    return selected_stage_code, selected_stage_name, sub_stage_1, opt_sub_stage_2
 
 # ----------------- 核心工具函数 -----------------
 def number_to_words_usd(amount):
@@ -304,7 +289,6 @@ if mode == "📝 Single Mannul Check":
 
         if "Construction" in biz_mode:
             company_name = "Moo Construction"
-            
             project_options = preset_project_list + ["+ New Project"]
             selected_proj = st.selectbox("Project", project_options)
 
@@ -319,19 +303,9 @@ if mode == "📝 Single Mannul Check":
                 default_chk_val = 1001
 
             account_num = st.text_input("Bank Account", value=default_account)
-            
-            # --- Stage 选择 ---
-            stage_choice = st.selectbox("Stage", PRESET_STAGES)
-            if stage_choice == "Other / Custom Stage":
-                selected_stage = st.text_input("Custom Stage", value="Stage 1")
-            else:
-                selected_stage = stage_choice.split(":")[0].strip() # 简化显示为 Stage X
-            
-            user_memo = st.text_input("Memo Detail", value="", help="可填具体的备注内容，如：Labor / Framing")
 
         else:
             company_name = "Moo Housing Inc"
-            
             project_options = preset_project_list + ["+ New Project"]
             selected_proj = st.selectbox("Project", project_options)
 
@@ -346,26 +320,37 @@ if mode == "📝 Single Mannul Check":
                 "Bank Account",
                 ["ACC-8652", "ACC-3738", "Other"]
             )
-
-            if account_choice == "Other":
-                account_num = st.text_input("Enter Account", value="ACC-")
-            else:
-                account_num = account_choice
-
-            selected_stage = st.text_input("Stage", value="Move-out")
-            user_memo = st.text_input("Memo Detail", value="Deposit Refund")
+            account_num = st.text_input("Enter Account", value="ACC-") if account_choice == "Other" else account_choice
 
         company_display = st.text_input("Company", value=company_name)
 
         st.markdown("---")
 
-        payee_name = st.text_input(
-            "Payee Name",
-            value="John Smith",
+        # ---- 收款人选择与 Worker 表属性自动匹配 ----
+        payee_name = st.selectbox("Payee Name", options=preset_worker_list) if preset_worker_list else st.text_input("Payee Name", value="John Smith")
+
+        # 根据选中的收款人查找 Worker 表预设
+        def_stg, def_stg_name, def_sub_stg = "", "", ""
+        if not df_workers.empty and payee_name in df_workers["Worker_Name"].values:
+            w_info = df_workers[df_workers["Worker_Name"] == payee_name].iloc[0]
+            def_stg = w_info.get("Stage", "")
+            def_stg_name = w_info.get("Stage_Name", "")
+            def_sub_stg = w_info.get("Sub_Stage", "")
+
+        # 预设默认 Memo
+        default_memo_text = f"{def_sub_stg} - {def_stg_name}" if def_sub_stg else def_stg_name
+
+        st.markdown("##### 🏗️ 工程阶段 (Stage Selection)")
+        st_code, st_name, sub1, sub2 = render_stage_selector(
+            key_prefix="single_check",
+            default_stage=def_stg,
+            default_stage_name=def_stg_name,
+            default_sub_stage=def_sub_stg
         )
-        pay_amount = st.number_input(
-            "Amount", min_value=0.01, value=1500.00, step=100.0
-        )
+
+        user_memo = st.text_input("Memo Detail", value=default_memo_text, help="自动预填工人活计，可手动更改")
+
+        pay_amount = st.number_input("Amount", min_value=0.01, value=1500.00, step=100.0)
 
         c_a, c_b = st.columns(2)
         with c_a:
@@ -379,10 +364,14 @@ if mode == "📝 Single Mannul Check":
                 help="Automatically generated by System"
             )
 
-        # ✅ 统一清理并组合最终 Memo 文本（避免多余短横线）
+        # 组合 Stage 标记文本
+        sub_str = f"{sub1}, {sub2}" if sub2 else sub1
+        selected_stage_str = f"{st_code} ({sub_str})" if st_code else ""
+
+        # 统一清理并组合最终 Memo 文本
         memo_components = [project_site]
-        if selected_stage:
-            memo_components.append(f"[{selected_stage}]")
+        if selected_stage_str:
+            memo_components.append(f"[{selected_stage_str}]")
         if user_memo.strip():
             memo_components.append(f"- {user_memo.strip()}")
             
@@ -399,7 +388,6 @@ if mode == "📝 Single Mannul Check":
         "account": account_num,
     }
     
-    # 填充 PDF 用于预览与下载
     filled_pdf = fill_pdf_placeholders(pdf_template_bytes, replacements)
 
     with col2:
@@ -407,7 +395,7 @@ if mode == "📝 Single Mannul Check":
         st.markdown(f"""
         > **Company**: {company_display}  
         > **Bank Account**: `{account_num}`  
-        > **Stage**: {project_site} | **`{selected_stage}`**  
+        > **Project / Stage**: {project_site} | **`{selected_stage_str}`**  
         > **Check Number**: `#{check_num}`  
         > **Date**: {pay_date.strftime("%Y-%m-%d")}  
         > **Payee**: **{payee_name}**  
@@ -424,7 +412,7 @@ if mode == "📝 Single Mannul Check":
                     "Company": company_display,
                     "Account": account_num,
                     "Project": project_site,
-                    "Stage": selected_stage,
+                    "Stage": selected_stage_str,
                     "Payee Name": payee_name,
                     "Amount": pay_amount,
                     "Memo": memo_text,
@@ -459,7 +447,7 @@ elif mode == "👷 Construction Bulk Checks":
     st.subheader("1. Confirm the start check number")
 
     proj_start_nums = {}
-    cols = st.columns(min(len(df_projects), 4))
+    cols = st.columns(min(max(len(df_projects), 1), 4))
     for idx, p_row in df_projects.iterrows():
         p_name = p_row["Project_Name"]
         default_num = latest_check_map.get(p_name, 1001)
@@ -473,34 +461,38 @@ elif mode == "👷 Construction Bulk Checks":
 
     st.markdown("---")
 
-   # ----------------- 2. 初始化发薪数据列表 -----------------
+    # ----------------- 2. 快捷添加面板 -----------------
     st.subheader("2. Information")
 
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
 
-    # --- 1. 回调函数定义 ---
-    # 更换 Worker 时自动填充默认角色 Memo
+    # 更换 Worker 时自动同步该工人的默认活计 Memo
     def update_memo_on_worker_change():
-        selected_w = st.session_state.input_w
-        st.session_state.input_m = worker_role_map.get(selected_w, "")
+        selected_w = st.session_state.get("input_w", "")
+        if not df_workers.empty and selected_w in df_workers["Worker_Name"].values:
+            w_info = df_workers[df_workers["Worker_Name"] == selected_w].iloc[0]
+            stg_name = w_info.get("Stage_Name", "")
+            sub_stg = w_info.get("Sub_Stage", "")
+            st.session_state.input_m = f"{sub_stg} - {stg_name}" if sub_stg else stg_name
 
-    # 输入 Days 或 Rate 时自动算总 Amount (Days * Rate)
     def calculate_amount_from_days():
         days = st.session_state.get("input_days", 0.0)
         rate = st.session_state.get("input_rate", 0.0)
         if days > 0 and rate > 0:
             st.session_state.input_a = round(days * rate, 2)
 
-    if "input_m" not in st.session_state:
-        default_first_worker = preset_worker_list[0] if preset_worker_list else ""
-        st.session_state.input_m = worker_role_map.get(default_first_worker, "")
+    # 初始化默认 Worker 与 Memo
+    if "input_m" not in st.session_state and preset_worker_list:
+        first_w = preset_worker_list[0]
+        if not df_workers.empty and first_w in df_workers["Worker_Name"].values:
+            w_info = df_workers[df_workers["Worker_Name"] == first_w].iloc[0]
+            st.session_state.input_m = f"{w_info.get('Sub_Stage', '')} - {w_info.get('Stage_Name', '')}"
 
-# --- 快捷添加面板（两行布局） ---
     st.markdown("##### ➕ New Check")
     
     # 第一行：项目与人员基本信息
-    r1_c1, r1_c2, r1_c3 = st.columns([3, 3, 3])
+    r1_c1, r1_c2 = st.columns([1, 1])
     with r1_c1:
         add_worker = st.selectbox(
             "Payee Name", 
@@ -510,9 +502,22 @@ elif mode == "👷 Construction Bulk Checks":
         )
     with r1_c2:
         add_proj = st.selectbox("Project", preset_project_list, key="input_p")
-    with r1_c3:
-        add_stage = st.selectbox("Stage", PRESET_STAGES, key="input_s")
-        stage_val = add_stage.split(":")[0].strip()
+
+    # 查找工人的默认 Stage 配置用于联动定位
+    w_stg, w_stg_name, w_sub_stg = "", "", ""
+    if not df_workers.empty and add_worker in df_workers["Worker_Name"].values:
+        w_info = df_workers[df_workers["Worker_Name"] == add_worker].iloc[0]
+        w_stg = w_info.get("Stage", "")
+        w_stg_name = w_info.get("Stage_Name", "")
+        w_sub_stg = w_info.get("Sub_Stage", "")
+
+    # 嵌入式 Stage 联动选择
+    st_code, st_name, sub1, sub2 = render_stage_selector(
+        key_prefix="bulk_check",
+        default_stage=w_stg,
+        default_stage_name=w_stg_name,
+        default_sub_stage=w_sub_stg
+    )
 
     # 第二行：金额计算、Memo 与提交按钮
     r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns([1.5, 1.5, 2.0, 3.0, 1.2])
@@ -523,8 +528,7 @@ elif mode == "👷 Construction Bulk Checks":
             value=0.0, 
             step=0.5, 
             key="input_days",
-            on_change=calculate_amount_from_days,
-            help="可选：填入天数与日薪将自动计算 Amount"
+            on_change=calculate_amount_from_days
         )
     with r2_c2:
         add_rate = st.number_input(
@@ -533,8 +537,7 @@ elif mode == "👷 Construction Bulk Checks":
             value=0.0, 
             step=10.0, 
             key="input_rate",
-            on_change=calculate_amount_from_days,
-            help="可选：填入天数与日薪将自动计算 Amount"
+            on_change=calculate_amount_from_days
         )
     with r2_c3:
         add_amt = st.number_input("Total Amount", min_value=0.01, value=1200.00, step=50.0, key="input_a")
@@ -554,10 +557,12 @@ elif mode == "👷 Construction Bulk Checks":
             else:
                 next_chk = proj_start_nums.get(add_proj, 1001)
 
+            stage_val_str = f"{st_code} ({f'{sub1}, {sub2}' if sub2 else sub1})" if st_code else ""
+
             st.session_state.payroll_list.append({
                 "Payee": add_worker,
                 "Project": add_proj,
-                "Stage": stage_val,
+                "Stage": stage_val_str,
                 "Days": add_days if add_days > 0 else None,
                 "Rate": add_rate if add_rate > 0 else None,
                 "Check #": int(next_chk),
@@ -602,13 +607,14 @@ elif mode == "👷 Construction Bulk Checks":
         df_payroll_input = pd.DataFrame()
 
     st.markdown("---")
-    # ----------------- 3. 批量生成与导出 -----------------
+    
+    # ----------------- 4. 批量生成与导出 -----------------
     if not df_payroll_input.empty:
         if st.button(f"🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks", type="primary", use_container_width=True):
             account_pdf_dict = {}
             records_log = []
 
-            proj_map = df_projects.set_index("Project_Name").to_dict(orient="index")
+            proj_map = df_projects.set_index("Project_Name").to_dict(orient="index") if not df_projects.empty else {}
 
             for idx, row in df_payroll_input.iterrows():
                 worker_name = str(row.get("Payee", "")).strip()
@@ -627,11 +633,11 @@ elif mode == "👷 Construction Bulk Checks":
                 if amt <= 0 or not worker_name or cur_check <= 0:
                     continue
 
-                p_info = proj_map.get(project_name, {"Company": "Unknown Company", "Account": "ACC-0000"})
+                p_info = proj_map.get(project_name, {"Company": "Moo Construction", "Account": "ACC-8652"})
                 company_name = p_info["Company"]
                 account_num = p_info["Account"]
 
-                # ✅ 构造格式完美的完整 Memo 文本
+                # 构造格式完整的 Memo 文本
                 memo_parts = [project_name]
                 if stage_name:
                     memo_parts.append(f"[{stage_name}]")
@@ -670,7 +676,6 @@ elif mode == "👷 Construction Bulk Checks":
                 })
 
             if records_log:
-                # 发送至云端 Google Sheets
                 if save_to_history(records_log):
                     st.session_state.payroll_list = []
 
