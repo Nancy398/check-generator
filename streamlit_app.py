@@ -285,11 +285,13 @@ if mode == "📝 Single Mannul Check":
                 selected_stage = st.text_input("Custom Stage", value="Stage 1")
             else:
                 selected_stage = stage_choice.split(":")[0].strip() # 简化显示为 Stage X
-            memo_text = st.text_input(
-                "备注 (Memo)", value=default_memo
+            user_input = st.text_input(
+                "Memo", 
+                value=""
             )
-
-            default_memo = f"{project_site} [{selected_stage}] - {memo_text}"
+            
+            # 2. 最终使用的完整 Memo 文本
+            memo_text = f"{project_site} [{selected_stage}] - {user_input}" if user_input else f"{project_site} [{selected_stage}]"
 
         else:
             company_name = "Moo Housing Inc"
