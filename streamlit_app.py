@@ -22,67 +22,6 @@ WORKERS_CSV = "workers_config.csv"
 GS_SPREADSHEET_NAME = "Check Issuance History"  # Google 表格的名字
 GS_WORKSHEET_NAME = "Sheet1"                  # 工作表的名字
 
-@st.cache_data(ttl=60)
-def load_stage_presets():
-    try:
-        df_s = read_file(GS_SPREADSHEET_NAME, "Stage")
-        if df_s.empty or not {"Stage", "Stage Name", "Sub_stage"}.issubset(df_s.columns):
-            st.warning("⚠️ Stage 表格为空或缺失必填列 ('Stage', 'Stage Name', 'Sub_stage')")
-            return pd.DataFrame(columns=["Stage", "Stage Name", "Sub_stage"])
-        return df_s
-    except Exception as e:
-        st.error(f"❌ 读取 Stage 表失败: {e}")
-        return pd.DataFrame(columns=["Stage", "Stage Name", "Sub_stage"])
-
-df_stages = load_stage_presets()
-
-if not df_stages.empty:
-    st.subheader("🏗️ 工程阶段选择 (Stage Selection)")
-
-    # 1. 拼接 Stage 和 Stage Name 方便在下拉框显示，例如："Stage - 1: Pre-construction & Demo"
-    df_stages["Full_Stage_Display"] = df_stages["Stage"] + ": " + df_stages["Stage Name"]
-    
-    stage_options = df_stages["Full_Stage_Display"].unique().tolist()
-
-    # 2. 选择主阶段 (Main Stage)
-    selected_stage_display = st.selectbox(
-        "1. 选择工程大类 (Stage)", 
-        options=stage_options,
-        index=0
-    )
-
-    # 过滤出当前 Stage 下的全部 Sub_stage
-    matched_sub_stages = df_stages[df_stages["Full_Stage_Display"] == selected_stage_display]["Sub_stage"].tolist()
-
-    # 3. 选择第一个 Sub_stage（自动弹出对应的子项，必选）
-    sub_stage_1 = st.selectbox(
-        f"2. 选择【{selected_stage_display}】下的具体项目 (Sub-stage 1)",
-        options=matched_sub_stages,
-        index=0
-    )
-
-    # 4. 选择第二个 Sub_stage（可选 Optional）
-    optional_sub_options = ["None (无)"] + [item for item in matched_sub_stages if item != sub_stage_1]
-    
-    sub_stage_2 = st.selectbox(
-        "3. (可选) 选择第二个具体项目 (Sub-stage 2 - Optional)",
-        options=optional_sub_options,
-        index=0
-    )
-
-    # 5. 最终选择的数据提取
-    selected_stage_code = df_stages[df_stages["Full_Stage_Display"] == selected_stage_display]["Stage"].iloc[0]
-    selected_stage_name = df_stages[df_stages["Full_Stage_Display"] == selected_stage_display]["Stage Name"].iloc[0]
-
-    final_sub_stages = [sub_stage_1]
-    if sub_stage_2 != "None (无)":
-        final_sub_stages.append(sub_stage_2)
-
-    # 6. 显示预览
-    st.success(
-        f"✅ **选中分类**：[{selected_stage_code}] {selected_stage_name}\n\n"
-        f"📌 **关联子项**：{', '.join(final_sub_stages)}"
-    )
 
 # ----------------- 1. 获取 Authorization 客户端 -----------------
 def get_gc_client():
@@ -191,6 +130,67 @@ def load_worker_presets():
 
 df_projects = load_project_presets()
 df_workers = load_worker_presets()
+@st.cache_data(ttl=60)
+def load_stage_presets():
+    try:
+        df_s = read_file(GS_SPREADSHEET_NAME, "Stage")
+        if df_s.empty or not {"Stage", "Stage Name", "Sub_stage"}.issubset(df_s.columns):
+            st.warning("⚠️ Stage 表格为空或缺失必填列 ('Stage', 'Stage Name', 'Sub_stage')")
+            return pd.DataFrame(columns=["Stage", "Stage Name", "Sub_stage"])
+        return df_s
+    except Exception as e:
+        st.error(f"❌ 读取 Stage 表失败: {e}")
+        return pd.DataFrame(columns=["Stage", "Stage Name", "Sub_stage"])
+
+df_stages = load_stage_presets()
+
+if not df_stages.empty:
+    st.subheader("🏗️ 工程阶段选择 (Stage Selection)")
+
+    # 1. 拼接 Stage 和 Stage Name 方便在下拉框显示，例如："Stage - 1: Pre-construction & Demo"
+    df_stages["Full_Stage_Display"] = df_stages["Stage"] + ": " + df_stages["Stage Name"]
+    
+    stage_options = df_stages["Full_Stage_Display"].unique().tolist()
+
+    # 2. 选择主阶段 (Main Stage)
+    selected_stage_display = st.selectbox(
+        "1. 选择工程大类 (Stage)", 
+        options=stage_options,
+        index=0
+    )
+
+    # 过滤出当前 Stage 下的全部 Sub_stage
+    matched_sub_stages = df_stages[df_stages["Full_Stage_Display"] == selected_stage_display]["Sub_stage"].tolist()
+
+    # 3. 选择第一个 Sub_stage（自动弹出对应的子项，必选）
+    sub_stage_1 = st.selectbox(
+        f"2. 选择【{selected_stage_display}】下的具体项目 (Sub-stage 1)",
+        options=matched_sub_stages,
+        index=0
+    )
+
+    # 4. 选择第二个 Sub_stage（可选 Optional）
+    optional_sub_options = ["None (无)"] + [item for item in matched_sub_stages if item != sub_stage_1]
+    
+    sub_stage_2 = st.selectbox(
+        "3. (可选) 选择第二个具体项目 (Sub-stage 2 - Optional)",
+        options=optional_sub_options,
+        index=0
+    )
+
+    # 5. 最终选择的数据提取
+    selected_stage_code = df_stages[df_stages["Full_Stage_Display"] == selected_stage_display]["Stage"].iloc[0]
+    selected_stage_name = df_stages[df_stages["Full_Stage_Display"] == selected_stage_display]["Stage Name"].iloc[0]
+
+    final_sub_stages = [sub_stage_1]
+    if sub_stage_2 != "None (无)":
+        final_sub_stages.append(sub_stage_2)
+
+    # 6. 显示预览
+    st.success(
+        f"✅ **选中分类**：[{selected_stage_code}] {selected_stage_name}\n\n"
+        f"📌 **关联子项**：{', '.join(final_sub_stages)}"
+    )
 
 # 构建工人及角色的字典与列表
 worker_role_map = dict(zip(df_workers["Worker_Name"], df_workers["Default_Role"]))
