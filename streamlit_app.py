@@ -320,16 +320,25 @@ if mode == "📝 Single Mannul Check":
                 account_num = project_account
                 st.info(f"💡 **Development Company** 已自动使用项目对应的账户: `{account_num}`")
 
-            # Construction 收款人（从工人预设列表中选择）
-            payee_name = st.selectbox("Payee Name", options=preset_worker_list) if preset_worker_list else st.text_input("Payee Name", value="John Smith")
+            # Construction 收款人（提供：选择列表 vs 手动输入 两种方式）
+            payee_mode = st.radio(
+                "Payee Input Mode",
+                ["List Selection", "Custom Input"],
+                index=0,
+                horizontal=True
+            )
 
-            if not df_workers.empty and payee_name in df_workers["Worker_Name"].values:
-                w_info = df_workers[df_workers["Worker_Name"] == payee_name].iloc[0]
-                def_stg = w_info.get("Stage", "")
-                def_stg_name = w_info.get("Stage_Name", "")
-                def_sub_stg = w_info.get("Sub_Stage", "")
+            if payee_mode == "List Selection" and preset_worker_list:
+                payee_name = st.selectbox("Payee Name", options=preset_worker_list)
+                if not df_workers.empty and payee_name in df_workers["Worker_Name"].values:
+                    w_info = df_workers[df_workers["Worker_Name"] == payee_name].iloc[0]
+                    def_stg = w_info.get("Stage", "")
+                    def_stg_name = w_info.get("Stage_Name", "")
+                    def_sub_stg = w_info.get("Sub_Stage", "")
+            else:
+                payee_name = st.text_input("Payee Name", value="", placeholder="Enter payee full name")
 
-        # 分支 2：Moo Housing 逻辑 (不用选择 Project，Payee Name 手动输入)
+        # 分支 2：Moo Housing 逻辑
         else:
             payer_entity = "Moo Housing"
             company_name = "Moo Housing Inc"
