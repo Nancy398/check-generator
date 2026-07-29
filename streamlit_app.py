@@ -289,13 +289,16 @@ if mode == "📝 Single Mannul Check":
 
         # 2. 项目选择
         project_options = preset_project_list + ["+ New Project"]
-        selected_proj = st.selectbox("Project", project_options)
+        selected_proj = st.selectbox("Project", project_options, key="single_proj_select")
 
+        # 动态获取当前 Project 对应的 Account
         if selected_proj != "+ New Project":
             project_site = selected_proj
             default_chk_val = latest_check_map.get(selected_proj, 1001)
             p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
-            project_account = p_info.get("Account", "ACC-8652")
+            
+            # 读取项目绑定的 Account
+            project_account = str(p_info.get("Account", "ACC-8652")).strip()
         else:
             project_site = st.text_input("Project Name", value="New Site")
             default_chk_val = 1001
@@ -314,10 +317,22 @@ if mode == "📝 Single Mannul Check":
                 company_name = "Moo Construction"
                 account_num = "Chase-1185"
                 st.info("💡 **Moo Construction** 付款账户已固定锁定为: `Chase-1185`")
-            else: # Development Company
+            else: # Development Company -> 自动关联 Project 对应的 Account
                 company_name = "Development Company"
-                acc_idx = ACCOUNT_OPTIONS.index(project_account) if project_account in ACCOUNT_OPTIONS else ACCOUNT_OPTIONS.index("Other")
-                account_choice = st.selectbox("Bank Account Choice", ACCOUNT_OPTIONS, index=acc_idx)
+                
+                # 计算项目对应的账号在下拉框中的位置
+                if project_account in ACCOUNT_OPTIONS:
+                    acc_idx = ACCOUNT_OPTIONS.index(project_account)
+                else:
+                    acc_idx = ACCOUNT_OPTIONS.index("Other")
+
+                account_choice = st.selectbox(
+                    "Bank Account Choice (Auto-filled from Project)", 
+                    ACCOUNT_OPTIONS, 
+                    index=acc_idx,
+                    key=f"single_acc_choice_{selected_proj}"  # 使用 dynamic key 确保 Project 切换时下拉菜单自动刷新
+                )
+                
                 if account_choice == "Other":
                     account_num = st.text_input("Enter Custom Bank Account", value=project_account)
                 else:
@@ -498,7 +513,7 @@ elif mode == "👷 Construction Bulk Checks":
         else:
             if not df_projects.empty and selected_p in df_projects["Project_Name"].values:
                 p_info = df_projects[df_projects["Project_Name"] == selected_p].iloc[0]
-                st.session_state.input_acc = p_info.get("Account", "ACC-8652")
+                st.session_state.input_acc = str(p_info.get("Account", "ACC-8652")).strip()
 
     def calculate_amount_from_days():
         days = st.session_state.get("input_days", 0.0)
@@ -512,7 +527,7 @@ elif mode == "👷 Construction Bulk Checks":
     if "input_acc" not in st.session_state and preset_project_list:
         first_p = preset_project_list[0]
         p_info = df_projects[df_projects["Project_Name"] == first_p].iloc[0]
-        st.session_state.input_acc = p_info.get("Account", "ACC-8652")
+        st.session_state.input_acc = str(p_info.get("Account", "ACC-8652")).strip()
 
     if "input_m" not in st.session_state and preset_worker_list:
         first_w = preset_worker_list[0]
@@ -690,7 +705,7 @@ elif mode == "👷 Construction Bulk Checks":
                 elif company_name == "Moo Housing":
                     account_num = str(row.get("Account", "")).strip() or "ACC-8652"
                 else:
-                    account_num = str(row.get("Account", "")).strip() or p_info.get("Account", "ACC-8652")
+                    account_num = str(row.get("Account", "")).strip() or str(p_info.get("Account", "ACC-8652")).strip()
 
                 if project_name and detail_memo:
                     full_memo = f"{project_name} - {detail_memo}"
