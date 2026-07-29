@@ -108,55 +108,35 @@ def fetch_next_check_numbers_from_gs(df_p_list, default_start_number=1001):
             
     return next_numbers
 
-# ----------------- 初始化/读取基础预设文件 -----------------
+@st.cache_data(ttl=60)  # 缓存 60 秒，避免频繁刷新页面导致 Google API 限流
 def load_project_presets():
-    """读取或创建公司与工地项目对应表"""
-    if not os.path.exists(PROJECTS_CSV):
-        df_default = pd.DataFrame(
-            [
-                {
-                    "Project_Name": "123 Main St",
-                    "Company": "Moo Construction Inc",
-                    "Account": "ACC-8652",
-                },
-                {
-                    "Project_Name": "456 Oak Ave",
-                    "Company": "Moo Construction Inc",
-                    "Account": "ACC-3738",
-                },
-                {
-                    "Project_Name": "789 Pine Rd",
-                    "Company": "Moo Housing Inc",
-                    "Account": "ACC-8652",
-                },
-            ]
-        )
-        df_default.to_csv(PROJECTS_CSV, index=False)
+    """从 Google Sheets 的 'Project' 工作表读取公司与项目配置"""
+    try:
+        df_p = read_file(GS_SPREADSHEET_NAME, "Project")
+        if df_p.empty or "Project_Name" not in df_p.columns:
+            st.warning("⚠️ Google Sheets 中 'Project' 表格为空或缺失 'Project_Name' 列！")
+            return pd.DataFrame(columns=["Project_Name", "Company", "Account"])
+        return df_p
+    except Exception as e:
+        st.error(f"❌ 读取 Google Sheets 的 'Project' 表失败: {e}")
+        return pd.DataFrame(columns=["Project_Name", "Company", "Account"])
 
-    df_p = pd.read_csv(PROJECTS_CSV)
-    if "Next_Check_Number" in df_p.columns:
-        df_p = df_p.drop(columns=["Next_Check_Number"])
-        df_p.to_csv(PROJECTS_CSV, index=False)
-    return df_p
-
+@st.cache_data(ttl=60)
 def load_worker_presets():
-    """读取常用工人及其默认岗位 (Default_Role)"""
-    if not os.path.exists(WORKERS_CSV):
-        df_default = pd.DataFrame(
-            [
-                {"Worker_Name": "John Smith", "Default_Role": "Framing Lead"},
-                {"Worker_Name": "Carlos Mendez", "Default_Role": "Drywaller"},
-                {"Worker_Name": "David Lee", "Default_Role": "Electrician"},
-                {"Worker_Name": "Jose Rodriguez", "Default_Role": "General Labor"},
-            ]
-        )
-        df_default.to_csv(WORKERS_CSV, index=False)
-
-    df_workers = pd.read_csv(WORKERS_CSV)
-    if "Default_Role" not in df_workers.columns:
-        df_workers["Default_Role"] = "Worker"
-        df_workers.to_csv(WORKERS_CSV, index=False)
-    return df_workers
+    """从 Google Sheets 的 'Worker' 工作表读取工人及默认岗位"""
+    try:
+        df_w = read_file(GS_SPREADSHEET_NAME, "Worker")
+        if df_w.empty or "Worker_Name" not in df_w.columns:
+            st.warning("⚠️ Google Sheets 中 'Worker' 表格为空或缺失 'Worker_Name' 列！")
+            return pd.DataFrame(columns=["Worker_Name", "Default_Role"])
+        
+        if "Default_Role" not in df_w.columns:
+            df_w["Default_Role"] = "Worker"
+            
+        return df_w
+    except Exception as e:
+        st.error(f"❌ 读取 Google Sheets 的 'Worker' 表失败: {e}")
+        return pd.DataFrame(columns=["Worker_Name", "Default_Role"])
 
 df_projects = load_project_presets()
 df_workers = load_worker_presets()
