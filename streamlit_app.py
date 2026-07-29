@@ -21,9 +21,6 @@ DEFAULT_TEMPLATE_PATH = "check_run.pdf"
 GS_SPREADSHEET_NAME = "Check Issuance History"  # Google 表格的名字
 GS_WORKSHEET_NAME = "Sheet1"                  # 历史记录工作表的名字
 
-# 预设可选账号列表
-ACCOUNT_OPTIONS = ["ACC-8652", "ACC-3738", "Chase-1185", "ACC-1001", "Other"]
-
 # ----------------- 1. 获取 Authorization 客户端 -----------------
 def get_gc_client():
     scope = [
@@ -277,7 +274,7 @@ if mode == "📝 Single Mannul Check":
     with col1:
         st.subheader("Information")
 
-        # 1. 顶级分类只保留 Construction 和 Moo Housing
+        # 1. 顶级分类：Construction 与 Moo Housing
         main_category = st.radio(
             "Business Category：",
             ["🏗️ Construction", "🏠 Moo Housing"],
@@ -287,60 +284,47 @@ if mode == "📝 Single Mannul Check":
 
         st.markdown("---")
 
-        # 2. 项目选择
-        project_options = preset_project_list + ["+ New Project"]
-        selected_proj = st.selectbox("Project", project_options, key="single_proj_select")
-
-        # 动态获取当前 Project 对应的 Account
-        if selected_proj != "+ New Project":
-            project_site = selected_proj
-            default_chk_val = latest_check_map.get(selected_proj, 1001)
-            p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
-            
-            # 读取项目绑定的 Account
-            project_account = str(p_info.get("Account", "ACC-8652")).strip()
-        else:
-            project_site = st.text_input("Project Name", value="New Site")
-            default_chk_val = 1001
-            project_account = "ACC-8652"
-
-        # 3. 核心分支逻辑：Construction 下细分 Payer Entities，默认选中 Development Company
+        # 分支 1：Construction 逻辑
         if main_category == "🏗️ Construction":
+            # 选择项目
+            project_options = preset_project_list + ["+ New Project"]
+            selected_proj = st.selectbox("Project", project_options, key="single_proj_select")
+
+            if selected_proj != "+ New Project":
+                project_site = selected_proj
+                default_chk_val = latest_check_map.get(selected_proj, 1001)
+                p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
+                project_account = str(p_info.get("Account", "ACC-8652")).strip()
+            else:
+                project_site = st.text_input("Project Name", value="New Site")
+                default_chk_val = 1001
+                project_account = "ACC-8652"
+
+            # 选择 Payer Entity
             payer_entity = st.selectbox(
                 "Payer Entity",
                 options=["Development Company", "Moo Construction"],
-                index=0, # 默认选中 Development Company
-                help="默认是 Development Company，可选 Moo Construction"
+                index=0,
+                help="选择付款主体"
             )
 
+            # 根据 Payer Entity 绑定账号，不用选择
             if payer_entity == "Moo Construction":
                 company_name = "Moo Construction"
                 account_num = "Chase-1185"
-                st.info("💡 **Moo Construction** 付款账户已固定锁定为: `Chase-1185`")
-            else: # Development Company -> 自动关联 Project 对应的 Account
+                st.info("💡 **Moo Construction** 付款账户已自动固定为: `Chase-1185`")
+            else:  # Development Company
                 company_name = "Development Company"
-                
-                # 计算项目对应的账号在下拉框中的位置
-                if project_account in ACCOUNT_OPTIONS:
-                    acc_idx = ACCOUNT_OPTIONS.index(project_account)
-                else:
-                    acc_idx = ACCOUNT_OPTIONS.index("Other")
+                account_num = project_account
+                st.info(f"💡 **Development Company** 已自动使用项目对应的账户: `{account_num}`")
 
-                account_choice = st.selectbox(
-                    "Bank Account Choice (Auto-filled from Project)", 
-                    ACCOUNT_OPTIONS, 
-                    index=acc_idx,
-                    key=f"single_acc_choice_{selected_proj}"  # 使用 dynamic key 确保 Project 切换时下拉菜单自动刷新
-                )
-                
-                if account_choice == "Other":
-                    account_num = st.text_input("Enter Custom Bank Account", value=project_account)
-                else:
-                    account_num = account_choice
-
-        else: # 🏠 Moo Housing
+        # 分支 2：Moo Housing 逻辑 (不用选择 Project)
+        else:
             payer_entity = "Moo Housing"
             company_name = "Moo Housing Inc"
+            project_site = "Moo Housing"  # Project 固定赋予缺省名称
+            default_chk_val = latest_check_map.get("Moo Housing", 1001)
+
             moo_acc_options = ["ACC-8652", "ACC-3738", "Other"]
             acc_choice = st.selectbox("Bank Account Choice", moo_acc_options, index=0)
             if acc_choice == "Other":
@@ -352,7 +336,7 @@ if mode == "📝 Single Mannul Check":
 
         st.markdown("---")
 
-        # 4. 收款人与 Memo 控制
+        # 收款人设置
         payee_name = st.selectbox("Payee Name", options=preset_worker_list) if preset_worker_list else st.text_input("Payee Name", value="John Smith")
 
         def_stg, def_stg_name, def_sub_stg = "", "", ""
@@ -362,7 +346,7 @@ if mode == "📝 Single Mannul Check":
             def_stg_name = w_info.get("Stage_Name", "")
             def_sub_stg = w_info.get("Sub_Stage", "")
 
-        # ⭐ Moo Housing 默认 Deposit Refund；Construction 默认带出 Stage
+        # Memo 与 Stage 的针对性设置
         if main_category == "🏠 Moo Housing":
             default_memo_text = "Deposit Refund"
             selected_stage_str = ""
@@ -395,13 +379,16 @@ if mode == "📝 Single Mannul Check":
                 help="Automatically generated by System"
             )
 
-        # 拼接 Memo: [Project_Name] - [User_Memo]
-        if project_site and user_memo.strip():
-            memo_text = f"{project_site} - {user_memo.strip()}"
-        elif project_site:
-            memo_text = project_site
-        else:
+        # 拼接 Memo 逻辑
+        if main_category == "🏠 Moo Housing":
             memo_text = user_memo.strip()
+        else:
+            if project_site and user_memo.strip():
+                memo_text = f"{project_site} - {user_memo.strip()}"
+            elif project_site:
+                memo_text = project_site
+            else:
+                memo_text = user_memo.strip()
 
         amount_words = number_to_words_usd(pay_amount)
 
