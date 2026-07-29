@@ -613,9 +613,9 @@ elif mode == "👷 Construction Bulk Checks":
         if st.button(f"🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks", type="primary", use_container_width=True):
             account_pdf_dict = {}
             records_log = []
-
+    
             proj_map = df_projects.set_index("Project_Name").to_dict(orient="index") if not df_projects.empty else {}
-
+    
             for idx, row in df_payroll_input.iterrows():
                 worker_name = str(row.get("Payee", "")).strip()
                 project_name = str(row.get("Project", "")).strip()
@@ -627,25 +627,20 @@ elif mode == "👷 Construction Bulk Checks":
                 except (ValueError, TypeError):
                     cur_check = 0
                     amt = 0.0
-
+    
+                # 直接提取 detail_memo，不再叠加项目名和 Stage 前缀
                 detail_memo = str(row.get("Memo", "")).strip()
-
+    
                 if amt <= 0 or not worker_name or cur_check <= 0:
                     continue
-
+    
                 p_info = proj_map.get(project_name, {"Company": "Moo Construction", "Account": "ACC-8652"})
                 company_name = p_info["Company"]
                 account_num = p_info["Account"]
-
-                # 构造格式完整的 Memo 文本
-                memo_parts = [project_name]
-                if stage_name:
-                    memo_parts.append(f"[{stage_name}]")
-                if detail_memo:
-                    memo_parts.append(f"- {detail_memo}")
-                
-                full_memo = " ".join(memo_parts)
-
+    
+                # Memo 仅保留详情文本
+                full_memo = detail_memo
+    
                 replacements = {
                     "date": pay_date.strftime("%m/%d/%Y"),
                     "name": worker_name,
@@ -655,14 +650,14 @@ elif mode == "👷 Construction Bulk Checks":
                     "number": str(cur_check),
                     "account": account_num
                 }
-
+    
                 pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
                 
                 acc_key = (company_name, account_num)
                 if acc_key not in account_pdf_dict:
                     account_pdf_dict[acc_key] = []
                 account_pdf_dict[acc_key].append((cur_check, project_name, worker_name, pdf_res))
-
+    
                 records_log.append({
                     "Check Number": cur_check,
                     "Issue Date": pay_date.strftime("%Y-%m-%d"),
@@ -674,7 +669,6 @@ elif mode == "👷 Construction Bulk Checks":
                     "Amount": amt,
                     "Memo": full_memo
                 })
-
             if records_log:
                 if save_to_history(records_log):
                     st.session_state.payroll_list = []
