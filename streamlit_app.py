@@ -600,16 +600,20 @@ elif mode == "👷 Construction Bulk Checks":
                     with col_sum1:
                         st.markdown("#### 🏢 Summary by Company / Account")
                         summary_company = df_batch.groupby(["Company", "Account"]).agg(
-                        Total Amount=("Amount", "sum"),
-                        Total Number=("Check Number", "count")
+                            **{
+                                "Total Amount": ("Amount", "sum"),
+                                "Total Number": ("Check Number", "count")
+                            }
                         ).reset_index()
                         st.dataframe(summary_company.style.format({"Total Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
 
                     with col_sum2:
                         st.markdown("#### 🏗️ Summary by Project")
                         summary_project = df_batch.groupby(["Project", "Company"]).agg(
-                        Total Labor Cost=("Amount", "sum"),
-                        Worker Count=("Check Number", "count")
+                            **{
+                                "Total Labor Cost": ("Amount", "sum"),
+                                "Worker Count": ("Check Number", "count")
+                            }
                         ).reset_index()
                         st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
 
