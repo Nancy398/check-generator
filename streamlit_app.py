@@ -97,14 +97,41 @@ def fetch_next_check_numbers_from_gs(df_p_list, default_start_number=1001):
             
     return next_numbers
 
-# ----------------- 5. 数据预设加载函数 -----------------
+# ----------------- 5. 自动匹配 Stage 的拦截逻辑 -----------------
+def auto_match_stage(worker_name, project_name, default_stg, default_stg_name, default_sub):
+    """根据特殊的 Worker 或 Project 自动覆盖默认的 Stage"""
+    # 1. 优先匹配工人姓名：Valente Herrera
+    if worker_name and "Valente Herrera" in worker_name:
+        return "Valente Salary", "Valente Salary", "Payroll"
+    
+    # 2. 匹配项目名称：83 Patrician Way
+    if project_name and "83 Patrician" in project_name:
+        return "83 Patrician Way", "83 Patrician Way", "General"
+    
+    # 3. 匹配项目名称：365 San Gabrial
+    if project_name and "365 San Gabrial" in project_name:
+        return "365 San Gabrial", "365 San Gabrial", "General"
+    
+    # 4. 未触发拦截时，使用默认在 Google Sheets 提取的配置
+    return default_stg, default_stg_name, default_sub
+
+# ----------------- 6. 数据预设加载函数 -----------------
 @st.cache_data(ttl=60)
 def load_project_presets():
     df_p = read_file(GS_SPREADSHEET_NAME, "Project")
+    
+    # 追加保证这 2 个常用项目存在
+    extra_projects = pd.DataFrame([
+        {"Project_Name": "83 Patrician Way", "Company": "Development Company", "Account": "ACC-8652"},
+        {"Project_Name": "365 San Gabrial", "Company": "Development Company", "Account": "ACC-8652"},
+    ])
+
     if df_p.empty or "Project_Name" not in df_p.columns:
-        st.warning("⚠️ Google Sheets 中 'Project' 表格为空或缺失 'Project_Name' 列！")
-        return pd.DataFrame(columns=["Project_Name", "Company", "Account"])
-    return df_p
+        return extra_projects
+
+    df_combined = pd.concat([df_p, extra_projects], ignore_index=True)
+    df_combined = df_combined.drop_duplicates(subset=["Project_Name"], keep="first")
+    return df_combined
 
 @st.cache_data(ttl=60)
 def load_worker_presets():
@@ -120,11 +147,23 @@ def load_worker_presets():
 def load_stage_presets():
     """读取 Stage 表格配置"""
     df_s = read_file(GS_SPREADSHEET_NAME, "Stage")
+    
+    # 追加 3 个预设的自定义 Stage 项
+    extra_stages = pd.DataFrame([
+        {"Stage": "83 Patrician Way", "Stage_Name": "83 Patrician Way", "Sub_Stage": "General"},
+        {"Stage": "365 San Gabrial", "Stage_Name": "365 San Gabrial", "Sub_Stage": "General"},
+        {"Stage": "Valente Salary", "Stage_Name": "Valente Salary", "Sub_Stage": "Payroll"},
+    ])
+
     required_cols = {"Stage", "Stage_Name", "Sub_Stage"}
     if df_s.empty or not required_cols.issubset(df_s.columns):
-        st.warning("⚠️ Stage 表格为空或缺少列！")
-        return pd.DataFrame(columns=["Stage", "Stage_Name", "Sub_Stage"])
-    return df_s
+        return extra_stages
+
+    # 合并云端读取的数据和新增项，并依据 Stage + Sub_Stage 去重
+    df_combined = pd.concat([df_s, extra_stages], ignore_index=True)
+    df_combined = df_combined.drop_duplicates(subset=["Stage", "Sub_Stage"], keep="first")
+
+    return df_combined
 
 # 加载云端预设数据
 df_projects = load_project_presets()
@@ -274,7 +313,6 @@ if mode == "📝 Single Mannul Check":
     with col1:
         st.subheader("Information")
 
-        # 1. 顶级分类：Construction 与 Moo Housing
         main_category = st.radio(
             "Business Category：",
             ["🏗️ Construction", "🏠 Moo Housing"],
@@ -288,7 +326,6 @@ if mode == "📝 Single Mannul Check":
 
         # 分支 1：Construction 逻辑
         if main_category == "🏗️ Construction":
-            # 选择项目
             project_options = preset_project_list + ["+ New Project"]
             selected_proj = st.selectbox("Project", project_options, key="single_proj_select")
 
@@ -304,7 +341,6 @@ if mode == "📝 Single Mannul Check":
                 project_account = "ACC-8652"
                 project_company = "Development Company"
 
-            # 选择 Payer Entity
             payer_entity = st.selectbox(
                 "Payer Entity",
                 options=["Development Company", "Moo Construction"],
@@ -312,17 +348,15 @@ if mode == "📝 Single Mannul Check":
                 help="选择付款主体"
             )
 
-            # 根据 Payer Entity 绑定账号与公司
             if payer_entity == "Moo Construction":
                 company_name = "Moo Construction"
                 account_num = "Chase-1185"
                 st.info("💡 **Moo Construction** 付款账户已自动固定为: `Chase-1185`")
-            else:  # Development Company -> 获取项目对应关联的真正公司名
+            else:
                 company_name = project_company
                 account_num = project_account
                 st.info(f"💡 **Development Company** 已自动使用项目对应的公司 (`{company_name}`) 与账户 (`{account_num}`)")
 
-            # Construction 收款人（提供：选择列表 vs 手动输入 两种方式）
             payee_mode = st.radio(
                 "Payee Input Mode",
                 ["List Selection", "Custom Input"],
@@ -344,7 +378,7 @@ if mode == "📝 Single Mannul Check":
         else:
             payer_entity = "Moo Housing"
             company_name = "Moo Housing Inc"
-            project_site = "Moo Housing"  # Project 固定赋予缺省名称
+            project_site = "Moo Housing"
             default_chk_val = latest_check_map.get("Moo Housing", 1001)
 
             moo_acc_options = ["ACC-8652", "ACC-3738", "Other"]
@@ -354,18 +388,22 @@ if mode == "📝 Single Mannul Check":
             else:
                 account_num = acc_choice
 
-            # Moo Housing 手动输入 Payee Name
             payee_name = st.text_input("Payee Name", value="", placeholder="Enter payee full name")
 
         company_display = st.text_input("Company Display Name", value=company_name)
 
         st.markdown("---")
 
-        # Memo 与 Stage 的针对性设置
+        # Stage 拦截计算与 Memo 处理
         if main_category == "🏠 Moo Housing":
             default_memo_text = "Deposit Refund"
             selected_stage_str = ""
         else:
+            # 运行自动拦截匹配逻辑
+            def_stg, def_stg_name, def_sub_stg = auto_match_stage(
+                payee_name, project_site, def_stg, def_stg_name, def_sub_stg
+            )
+
             default_memo_text = f"{def_stg_name} - {def_sub_stg}" if def_sub_stg else def_stg_name
             
             st.markdown("##### 🏗️ 工程阶段 (Stage Selection)")
@@ -394,7 +432,6 @@ if mode == "📝 Single Mannul Check":
                 help="Automatically generated by System"
             )
 
-        # 拼接 Memo 逻辑
         if main_category == "🏠 Moo Housing":
             memo_text = user_memo.strip()
         else:
@@ -433,7 +470,6 @@ if mode == "📝 Single Mannul Check":
         > **Memo**: {memo_text}
         """)
 
-        # 1. 定义点击下载按钮时触发的回调函数
         def handle_sync_and_download():
             record = [
                 {
@@ -453,7 +489,6 @@ if mode == "📝 Single Mannul Check":
             else:
                 st.session_state["sync_error_msg"] = f"⚠️ Check #{check_num} PDF downloaded, but failed to sync to Google Sheets."
 
-        # 2. 合二为一的“同步并下载”按钮
         st.download_button(
             label=f"🚀 Save to Sheets & Download PDF (#{check_num})",
             data=filled_pdf,
@@ -461,10 +496,9 @@ if mode == "📝 Single Mannul Check":
             mime="application/pdf",
             type="primary",
             use_container_width=True,
-            on_click=handle_sync_and_download  # 绑定回调逻辑
+            on_click=handle_sync_and_download
         )
 
-        # 3. 页面刷新后显示保存结果提示
         if "sync_success_msg" in st.session_state:
             st.balloons()
             st.success(st.session_state.pop("sync_success_msg"))
@@ -511,11 +545,17 @@ elif mode == "👷 Construction Bulk Checks":
 
     def update_memo_on_worker_change():
         selected_w = st.session_state.get("input_w", "")
+        selected_p = st.session_state.get("input_p", "")
+        
+        w_stg_name, w_sub_stg = "", ""
         if not df_workers.empty and selected_w in df_workers["Worker_Name"].values:
             w_info = df_workers[df_workers["Worker_Name"] == selected_w].iloc[0]
-            stg_name = w_info.get("Stage_Name", "")
-            sub_stg = w_info.get("Sub_Stage", "")
-            st.session_state.input_m = f"{stg_name} - {sub_stg}" if sub_stg else stg_name
+            w_stg_name = w_info.get("Stage_Name", "")
+            w_sub_stg = w_info.get("Sub_Stage", "")
+            
+        # 让 Memo 也走一遍拦截匹配逻辑
+        _, auto_stg_name, auto_sub_stg = auto_match_stage(selected_w, selected_p, "", w_stg_name, w_sub_stg)
+        st.session_state.input_m = f"{auto_stg_name} - {auto_sub_stg}" if auto_sub_stg else auto_stg_name
 
     def update_account_and_company():
         c_type = st.session_state.get("input_company_type", "Development Company")
@@ -525,10 +565,13 @@ elif mode == "👷 Construction Bulk Checks":
             st.session_state.input_acc = "Chase-1185"
         elif c_type == "Moo Housing":
             st.session_state.input_acc = "ACC-8652"
-        else: # Development Company 对应获取 Project 里的账号
+        else:
             if not df_projects.empty and selected_p in df_projects["Project_Name"].values:
                 p_info = df_projects[df_projects["Project_Name"] == selected_p].iloc[0]
                 st.session_state.input_acc = str(p_info.get("Account", "ACC-8652")).strip()
+        
+        # 触发 Memo 联动
+        update_memo_on_worker_change()
 
     def calculate_amount_from_days():
         days = st.session_state.get("input_days", 0.0)
@@ -546,9 +589,11 @@ elif mode == "👷 Construction Bulk Checks":
 
     if "input_m" not in st.session_state and preset_worker_list:
         first_w = preset_worker_list[0]
+        first_p = preset_project_list[0] if preset_project_list else ""
         if not df_workers.empty and first_w in df_workers["Worker_Name"].values:
             w_info = df_workers[df_workers["Worker_Name"] == first_w].iloc[0]
-            st.session_state.input_m = f"{w_info.get('Stage_Name', '')} - {w_info.get('Sub_Stage', '')}"
+            _, auto_sname, auto_sub = auto_match_stage(first_w, first_p, "", w_info.get("Stage_Name", ""), w_info.get("Sub_Stage", ""))
+            st.session_state.input_m = f"{auto_sname} - {auto_sub}" if auto_sub else auto_sname
 
     st.markdown("##### ➕ New Check")
     
@@ -587,6 +632,11 @@ elif mode == "👷 Construction Bulk Checks":
         w_stg = w_info.get("Stage", "")
         w_stg_name = w_info.get("Stage_Name", "")
         w_sub_stg = w_info.get("Sub_Stage", "")
+
+    # 批量组件中的自动匹配拦截
+    w_stg, w_stg_name, w_sub_stg = auto_match_stage(
+        add_worker, add_proj, w_stg, w_stg_name, w_sub_stg
+    )
 
     st_code, st_name, sub1, sub2 = render_stage_selector(
         key_prefix="bulk_check",
@@ -634,7 +684,6 @@ elif mode == "👷 Construction Bulk Checks":
 
             stage_val_str = f"{st_code} ({f'{sub1}, {sub2}' if sub2 else sub1})" if st_code else ""
 
-            # 联动计算真正的 Company Name
             if add_comp_type == "Development Company":
                 if not df_projects.empty and add_proj in df_projects["Project_Name"].values:
                     p_row_info = df_projects[df_projects["Project_Name"] == add_proj].iloc[0]
@@ -803,47 +852,3 @@ elif mode == "👷 Construction Bulk Checks":
                         st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
 
                     st.markdown("---")
-                    st.markdown("### 📥 Download PDFs by Account")
-
-                    for (comp_name, acc_num), item_list in account_pdf_dict.items():
-                        pdf_bytes_list = [item[3] for item in item_list]
-                        account_merged_pdf = merge_pdfs(pdf_bytes_list)
-                        
-                        st.markdown(f"##### 💳 Account: **{comp_name}** | No.: `{acc_num}` ({len(item_list)} check(s) total)")
-                        
-                        st.download_button(
-                            label=f"📄 Download Merged PDF ({comp_name} - {acc_num})",
-                            data=account_merged_pdf,
-                            file_name=f"Checks_{comp_name}_{acc_num}_{pay_date}.pdf",
-                            mime="application/pdf",
-                            type="primary"
-                        )
-
-                    st.markdown("---")
-                    st.markdown("##### 📦 More Export Options")
-                    
-                    csv_bytes = df_batch.to_csv(index=False).encode('utf-8-sig')
-                    
-                    zip_buf = io.BytesIO()
-                    with zipfile.ZipFile(zip_buf, "w") as zf:
-                        for (comp_name, acc_num), item_list in account_pdf_dict.items():
-                            for chk, proj, py, pdf_b in item_list:
-                                zf.writestr(f"[{acc_num}]_Check_{chk}_[{proj}]_{py}.pdf", pdf_b)
-
-                    d1, d2 = st.columns(2)
-                    with d1:
-                        st.download_button(
-                            label="📊 Download Payroll Summary (CSV)",
-                            data=csv_bytes,
-                            file_name=f"Payroll_Summary_{pay_date}.csv",
-                            mime="text/csv",
-                            use_container_width=True
-                        )
-                    with d2:
-                        st.download_button(
-                            label="📦 Download All Individual PDFs (ZIP)",
-                            data=zip_buf.getvalue(),
-                            file_name=f"Payroll_Checks_SinglePDFs_{pay_date}.zip",
-                            mime="application/zip",
-                            use_container_width=True
-                        )
