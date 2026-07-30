@@ -100,19 +100,15 @@ def fetch_next_check_numbers_from_gs(df_p_list, default_start_number=1001):
 # ----------------- 5. 自动匹配 Stage 的拦截逻辑 -----------------
 def auto_match_stage(worker_name, project_name, default_stg, default_stg_name, default_sub):
     """根据特殊的 Worker 或 Project 自动覆盖默认的 Stage"""
-    # 1. 优先匹配工人姓名：Valente Herrera
     if worker_name and "Valente Herrera" in worker_name:
         return "Valente Salary", "Valente Salary", "Payroll"
     
-    # 2. 匹配项目名称：83 Patrician Way
     if project_name and "83 Patrician" in project_name:
         return "83 Patrician Way", "83 Patrician Way", "General"
     
-    # 3. 匹配项目名称：365 San Gabrial
     if project_name and "365 San Gabrial" in project_name:
         return "365 San Gabrial", "365 San Gabrial", "General"
     
-    # 4. 未触发拦截时，使用默认在 Google Sheets 提取的配置
     return default_stg, default_stg_name, default_sub
 
 # ----------------- 6. 数据预设加载函数 -----------------
@@ -120,7 +116,6 @@ def auto_match_stage(worker_name, project_name, default_stg, default_stg_name, d
 def load_project_presets():
     df_p = read_file(GS_SPREADSHEET_NAME, "Project")
     
-    # 追加保证这 2 个常用项目存在
     extra_projects = pd.DataFrame([
         {"Project_Name": "83 Patrician Way", "Company": "Development Company", "Account": "ACC-8652"},
         {"Project_Name": "365 San Gabrial", "Company": "Development Company", "Account": "ACC-8652"},
@@ -135,7 +130,6 @@ def load_project_presets():
 
 @st.cache_data(ttl=60)
 def load_worker_presets():
-    """读取 Worker 表格"""
     df_w = read_file(GS_SPREADSHEET_NAME, "Worker")
     required_cols = {"Worker_Name", "Stage", "Stage_Name", "Sub_Stage"}
     if df_w.empty or not required_cols.issubset(df_w.columns):
@@ -145,10 +139,8 @@ def load_worker_presets():
 
 @st.cache_data(ttl=60)
 def load_stage_presets():
-    """读取 Stage 表格配置"""
     df_s = read_file(GS_SPREADSHEET_NAME, "Stage")
     
-    # 追加 3 个预设的自定义 Stage 项
     extra_stages = pd.DataFrame([
         {"Stage": "83 Patrician Way", "Stage_Name": "83 Patrician Way", "Sub_Stage": "General"},
         {"Stage": "365 San Gabrial", "Stage_Name": "365 San Gabrial", "Sub_Stage": "General"},
@@ -159,7 +151,6 @@ def load_stage_presets():
     if df_s.empty or not required_cols.issubset(df_s.columns):
         return extra_stages
 
-    # 合并云端读取的数据和新增项，并依据 Stage + Sub_Stage 去重
     df_combined = pd.concat([df_s, extra_stages], ignore_index=True)
     df_combined = df_combined.drop_duplicates(subset=["Stage", "Sub_Stage"], keep="first")
 
@@ -175,10 +166,10 @@ preset_project_list = df_projects["Project_Name"].dropna().tolist() if not df_pr
 
 latest_check_map = fetch_next_check_numbers_from_gs(preset_project_list)
 
-# ----------------- 通用 Stage 联动选择组件 -----------------
+# ----------------- 通用 Stage 联动选择组件 (升级支持强制控制 UI) -----------------
 def render_stage_selector(key_prefix="default", default_stage="", default_stage_name="", default_sub_stage=""):
     """
-    嵌入式的 Stage 三级联动选择组件
+    支持根据 Session State 强制更新 UI 选择索引的三级 Stage 联动组件
     """
     if df_stages.empty:
         st.warning("Stage 配置数据为空")
@@ -188,8 +179,18 @@ def render_stage_selector(key_prefix="default", default_stage="", default_stage_
     df_stages_temp["Display_Stage"] = df_stages_temp["Stage"] + ": " + df_stages_temp["Stage_Name"]
     unique_stages = df_stages_temp["Display_Stage"].unique().tolist()
 
+    # 如果系统强制设置了该 Key 的 Session State，则使用它；否则使用传入的 default
+    main_stage_key = f"{key_prefix}_main_stage"
+    sub_stage_1_key = f"{key_prefix}_sub_stage_1"
+    sub_stage_2_key = f"{key_prefix}_sub_stage_2"
+
     target_display = f"{default_stage}: {default_stage_name}"
-    stage_idx = unique_stages.index(target_display) if target_display in unique_stages else 0
+    
+    # 检测是否在 Session State 中强行改写了值
+    if main_stage_key in st.session_state and st.session_state[main_stage_key] in unique_stages:
+        stage_idx = unique_stages.index(st.session_state[main_stage_key])
+    else:
+        stage_idx = unique_stages.index(target_display) if target_display in unique_stages else 0
 
     col_s1, col_s2, col_s3 = st.columns([2, 2, 2])
 
@@ -198,20 +199,23 @@ def render_stage_selector(key_prefix="default", default_stage="", default_stage_
             "Stage (主阶段)",
             options=unique_stages,
             index=stage_idx,
-            key=f"{key_prefix}_main_stage"
+            key=main_stage_key
         )
 
     filtered_df = df_stages_temp[df_stages_temp["Display_Stage"] == selected_stage_display]
     sub_stage_options = filtered_df["Sub_Stage"].dropna().tolist()
 
-    sub1_idx = sub_stage_options.index(default_sub_stage) if default_sub_stage in sub_stage_options else 0
+    if sub_stage_1_key in st.session_state and st.session_state[sub_stage_1_key] in sub_stage_options:
+        sub1_idx = sub_stage_options.index(st.session_state[sub_stage_1_key])
+    else:
+        sub1_idx = sub_stage_options.index(default_sub_stage) if default_sub_stage in sub_stage_options else 0
 
     with col_s2:
         sub_stage_1 = st.selectbox(
             "Sub-Stage 1 (必选)",
             options=sub_stage_options,
             index=sub1_idx,
-            key=f"{key_prefix}_sub_stage_1"
+            key=sub_stage_1_key
         )
 
     with col_s3:
@@ -220,7 +224,7 @@ def render_stage_selector(key_prefix="default", default_stage="", default_stage_
             "Sub-Stage 2 (可选)",
             options=remaining_options,
             index=0,
-            key=f"{key_prefix}_sub_stage_2"
+            key=sub_stage_2_key
         )
 
     selected_stage_code = filtered_df["Stage"].iloc[0]
@@ -327,7 +331,33 @@ if mode == "📝 Single Mannul Check":
         # 分支 1：Construction 逻辑
         if main_category == "🏗️ Construction":
             project_options = preset_project_list + ["+ New Project"]
-            selected_proj = st.selectbox("Project", project_options, key="single_proj_select")
+            
+            # 定义回调函数：当选择 Project 或 Payee 发生变化时，强行改变 Stage 下拉框的值
+            def update_single_check_stage():
+                cur_payee = st.session_state.get("single_payee_select", "")
+                cur_proj = st.session_state.get("single_proj_select", "")
+                
+                # 获取原默认值
+                orig_stg, orig_sname, orig_sub = "", "", ""
+                if not df_workers.empty and cur_payee in df_workers["Worker_Name"].values:
+                    w_info = df_workers[df_workers["Worker_Name"] == cur_payee].iloc[0]
+                    orig_stg = w_info.get("Stage", "")
+                    orig_sname = w_info.get("Stage_Name", "")
+                    orig_sub = w_info.get("Sub_Stage", "")
+                
+                # 计算拦截联动值
+                auto_stg, auto_sname, auto_sub = auto_match_stage(cur_payee, cur_proj, orig_stg, orig_sname, orig_sub)
+                
+                # 强行重置界面 Session State 中的下拉框属性
+                st.session_state["single_check_main_stage"] = f"{auto_stg}: {auto_sname}"
+                st.session_state["single_check_sub_stage_1"] = auto_sub
+
+            selected_proj = st.selectbox(
+                "Project", 
+                project_options, 
+                key="single_proj_select",
+                on_change=update_single_check_stage
+            )
 
             if selected_proj != "+ New Project":
                 project_site = selected_proj
@@ -365,7 +395,12 @@ if mode == "📝 Single Mannul Check":
             )
 
             if payee_mode == "List Selection" and preset_worker_list:
-                payee_name = st.selectbox("Payee Name", options=preset_worker_list)
+                payee_name = st.selectbox(
+                    "Payee Name", 
+                    options=preset_worker_list,
+                    key="single_payee_select",
+                    on_change=update_single_check_stage
+                )
                 if not df_workers.empty and payee_name in df_workers["Worker_Name"].values:
                     w_info = df_workers[df_workers["Worker_Name"] == payee_name].iloc[0]
                     def_stg = w_info.get("Stage", "")
@@ -394,18 +429,15 @@ if mode == "📝 Single Mannul Check":
 
         st.markdown("---")
 
-        # Stage 拦截计算与 Memo 处理
+        # Stage 拦截计算与 UI 动态联动
         if main_category == "🏠 Moo Housing":
             default_memo_text = "Deposit Refund"
             selected_stage_str = ""
         else:
-            # 运行自动拦截匹配逻辑
             def_stg, def_stg_name, def_sub_stg = auto_match_stage(
                 payee_name, project_site, def_stg, def_stg_name, def_sub_stg
             )
 
-            default_memo_text = f"{def_stg_name} - {def_sub_stg}" if def_sub_stg else def_stg_name
-            
             st.markdown("##### 🏗️ 工程阶段 (Stage Selection)")
             st_code, st_name, sub1, sub2 = render_stage_selector(
                 key_prefix="single_check",
@@ -415,6 +447,8 @@ if mode == "📝 Single Mannul Check":
             )
             sub_str = f"{sub1}, {sub2}" if sub2 else sub1
             selected_stage_str = f"{st_code} ({sub_str})" if st_code else ""
+
+            default_memo_text = f"{st_name} - {sub1}" if sub1 else st_name
 
         user_memo = st.text_input("Memo Detail", value=default_memo_text)
 
@@ -518,7 +552,7 @@ elif mode == "👷 Construction Bulk Checks":
     pay_date = st.date_input("Date", value=date.today())
 
     st.markdown("---")
-    
+
     # ----------------- 1. 确认各项目起始支票号 -----------------
     st.subheader("1. Confirm the start check number")
 
@@ -543,19 +577,26 @@ elif mode == "👷 Construction Bulk Checks":
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
 
-    def update_memo_on_worker_change():
+    # 核心联动：更新 Worker 或 Project 时同时更新 Stage 下拉菜单 UI 与 Memo 内容
+    def update_bulk_stage_and_memo():
         selected_w = st.session_state.get("input_w", "")
         selected_p = st.session_state.get("input_p", "")
         
-        w_stg_name, w_sub_stg = "", ""
+        w_stg, w_stg_name, w_sub_stg = "", "", ""
         if not df_workers.empty and selected_w in df_workers["Worker_Name"].values:
             w_info = df_workers[df_workers["Worker_Name"] == selected_w].iloc[0]
+            w_stg = w_info.get("Stage", "")
             w_stg_name = w_info.get("Stage_Name", "")
             w_sub_stg = w_info.get("Sub_Stage", "")
             
-        # 让 Memo 也走一遍拦截匹配逻辑
-        _, auto_stg_name, auto_sub_stg = auto_match_stage(selected_w, selected_p, "", w_stg_name, w_sub_stg)
-        st.session_state.input_m = f"{auto_stg_name} - {auto_sub_stg}" if auto_sub_stg else auto_stg_name
+        auto_stg, auto_sname, auto_sub = auto_match_stage(selected_w, selected_p, w_stg, w_stg_name, w_sub_stg)
+        
+        # 强制重置界面 Session State 中的 Stage 下拉框选项
+        st.session_state["bulk_check_main_stage"] = f"{auto_stg}: {auto_sname}"
+        st.session_state["bulk_check_sub_stage_1"] = auto_sub
+        
+        # 同步更新 Memo 文本框
+        st.session_state.input_m = f"{auto_sname} - {auto_sub}" if auto_sub else auto_sname
 
     def update_account_and_company():
         c_type = st.session_state.get("input_company_type", "Development Company")
@@ -570,8 +611,7 @@ elif mode == "👷 Construction Bulk Checks":
                 p_info = df_projects[df_projects["Project_Name"] == selected_p].iloc[0]
                 st.session_state.input_acc = str(p_info.get("Account", "ACC-8652")).strip()
         
-        # 触发 Memo 联动
-        update_memo_on_worker_change()
+        update_bulk_stage_and_memo()
 
     def calculate_amount_from_days():
         days = st.session_state.get("input_days", 0.0)
@@ -592,7 +632,7 @@ elif mode == "👷 Construction Bulk Checks":
         first_p = preset_project_list[0] if preset_project_list else ""
         if not df_workers.empty and first_w in df_workers["Worker_Name"].values:
             w_info = df_workers[df_workers["Worker_Name"] == first_w].iloc[0]
-            _, auto_sname, auto_sub = auto_match_stage(first_w, first_p, "", w_info.get("Stage_Name", ""), w_info.get("Sub_Stage", ""))
+            _, auto_sname, auto_sub = auto_match_stage(first_w, first_p, w_info.get("Stage", ""), w_info.get("Stage_Name", ""), w_info.get("Sub_Stage", ""))
             st.session_state.input_m = f"{auto_sname} - {auto_sub}" if auto_sub else auto_sname
 
     st.markdown("##### ➕ New Check")
@@ -611,7 +651,7 @@ elif mode == "👷 Construction Bulk Checks":
             "Payee Name", 
             preset_worker_list, 
             key="input_w",
-            on_change=update_memo_on_worker_change
+            on_change=update_bulk_stage_and_memo
         )
     with r1_c3:
         add_proj = st.selectbox(
@@ -633,7 +673,6 @@ elif mode == "👷 Construction Bulk Checks":
         w_stg_name = w_info.get("Stage_Name", "")
         w_sub_stg = w_info.get("Sub_Stage", "")
 
-    # 批量组件中的自动匹配拦截
     w_stg, w_stg_name, w_sub_stg = auto_match_stage(
         add_worker, add_proj, w_stg, w_stg_name, w_sub_stg
     )
