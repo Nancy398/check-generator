@@ -433,7 +433,8 @@ if mode == "📝 Single Mannul Check":
         > **Memo**: {memo_text}
         """)
 
-        if st.button("🚀 Successfully transfer to Google Sheets", type="primary", use_container_width=True):
+        # 1. 定义点击下载按钮时触发的回调函数
+        def handle_sync_and_download():
             record = [
                 {
                     "Check Number": check_num,
@@ -448,16 +449,28 @@ if mode == "📝 Single Mannul Check":
                 }
             ]
             if save_to_history(record):
-                st.balloons()
-                st.success(f"🎉 Check #{check_num} Successfully transfer to Google Sheets！")
+                st.session_state["sync_success_msg"] = f"🎉 Check #{check_num} Successfully saved & transferred to Google Sheets!"
+            else:
+                st.session_state["sync_error_msg"] = f"⚠️ Check #{check_num} PDF downloaded, but failed to sync to Google Sheets."
 
+        # 2. 合二为一的“同步并下载”按钮
         st.download_button(
-            label=f"📥 Download PDF (#{check_num})",
+            label=f"🚀 Save to Sheets & Download PDF (#{check_num})",
             data=filled_pdf,
             file_name=f"Check_{check_num}_{payee_name}.pdf",
             mime="application/pdf",
+            type="primary",
             use_container_width=True,
+            on_click=handle_sync_and_download  # 绑定回调逻辑
         )
+
+        # 3. 页面刷新后显示保存结果提示
+        if "sync_success_msg" in st.session_state:
+            st.balloons()
+            st.success(st.session_state.pop("sync_success_msg"))
+            
+        if "sync_error_msg" in st.session_state:
+            st.error(st.session_state.pop("sync_error_msg"))
 
 # ==============================================================================
 # 场景 2：多项目/施工队周薪批量开单
