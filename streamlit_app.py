@@ -17,6 +17,7 @@ st.set_page_config(
 
 # ----------------- 配置文件与路径定义 -----------------
 DEFAULT_TEMPLATE_PATH = "check_run.pdf"
+ACC_3738_TEMPLATE_PATH = "check_run_3738.pdf"
 
 GS_SPREADSHEET_NAME = "Check Issuance History"  # Google 表格的名字
 GS_WORKSHEET_NAME = "Sheet1"                  # 历史记录工作表的名字
@@ -427,9 +428,12 @@ if mode == "📝 Single Mannul Check":
 
         company_display = st.text_input("Company Display Name", value=company_name)
 
+        # 提示用户当前调用的模板文件
+        active_tpl_name = "check_run_3738.pdf" if account_num == "ACC-3738" else "check_run.pdf"
+        st.info(f"📄 当前匹配使用的支票模板: **`{active_tpl_name}`**")
+
         st.markdown("---")
 
-        # Stage 拦截计算与 UI 动态联动
         if main_category == "🏠 Moo Housing":
             default_memo_text = "Deposit Refund"
             selected_stage_str = ""
@@ -478,6 +482,13 @@ if mode == "📝 Single Mannul Check":
 
         amount_words = number_to_words_usd(pay_amount)
 
+    # **根据账户名称获取对应模板数据**
+    current_pdf_template_bytes = get_pdf_template_bytes(account_num, custom_uploaded_bytes)
+
+    if not current_pdf_template_bytes:
+        st.error("❌ 无法匹配并加载指定的 PDF 模板，请确认对应 PDF 文件已放置在项目跟目录下。")
+        st.stop()
+
     replacements = {
         "date": pay_date.strftime("%m/%d/%Y"),
         "name": payee_name,
@@ -488,13 +499,14 @@ if mode == "📝 Single Mannul Check":
         "account": account_num,
     }
     
-    filled_pdf = fill_pdf_placeholders(pdf_template_bytes, replacements)
+    filled_pdf = fill_pdf_placeholders(current_pdf_template_bytes, replacements)
 
     with col2:
         st.subheader("👁️ Check Preview")
         st.markdown(f"""
         > **Company**: {company_display}  
         > **Bank Account**: `{account_num}`  
+        > **Template File**: `{active_tpl_name}`  
         > **Project / Stage**: {project_site} | **`{selected_stage_str}`**  
         > **Check Number**: `#{check_num}`  
         > **Date**: {pay_date.strftime("%Y-%m-%d")}  
