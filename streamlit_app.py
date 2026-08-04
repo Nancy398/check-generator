@@ -316,12 +316,10 @@ mode = st.sidebar.radio(
         "👷 Construction Bulk Checks",
     ],
 )
-
-if pdf_template_bytes is None:
-    st.warning("Please Upload Template")
-    uploaded_tpl = st.sidebar.file_uploader("Upload Template", type=["pdf"])
-    if uploaded_tpl:
-        pdf_template_bytes = uploaded_tpl.read()
+custom_uploaded_bytes = None
+uploaded_tpl = st.sidebar.file_uploader("Upload Override Template (Optional)", type=["pdf"])
+if uploaded_tpl:
+    custom_uploaded_bytes = uploaded_tpl.read()
 
 # ==============================================================================
 # 场景 1：单张手动生成支票
