@@ -156,6 +156,25 @@ def load_stage_presets():
     df_combined = df_combined.drop_duplicates(subset=["Stage", "Sub_Stage"], keep="first")
 
     return df_combined
+    
+def get_pdf_template_bytes(account_num, custom_uploaded_bytes=None):
+    """根据账号匹配对应的 PDF 模板，如果上传了自定义模板则优先使用"""
+    if custom_uploaded_bytes:
+        return custom_uploaded_bytes
+    
+    # 判断账号是否为 ACC-3738
+    if str(account_num).strip().upper() == "ACC-3738":
+        if os.path.exists(ACC_3738_TEMPLATE_PATH):
+            with open(ACC_3738_TEMPLATE_PATH, "rb") as f:
+                return f.read()
+        else:
+            st.warning(f"⚠️ 未找到 `{ACC_3738_TEMPLATE_PATH}` 模板文件，已回退使用默认模板。")
+
+    # 默认模板加载
+    if os.path.exists(DEFAULT_TEMPLATE_PATH):
+        with open(DEFAULT_TEMPLATE_PATH, "rb") as f:
+            return f.read()
+    return None
 
 # 加载云端预设数据
 df_projects = load_project_presets()
