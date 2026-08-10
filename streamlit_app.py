@@ -16,8 +16,8 @@ st.set_page_config(
 )
 
 # ----------------- 配置文件与路径定义 -----------------
-DEFAULT_TEMPLATE_PATH = "check_run.pdf"
-ACC_3738_TEMPLATE_PATH = "check_run_3738.pdf"
+DEFAULT_TEMPLATE_PATH = "check_run_3738.pdf"
+ACC_8652_TEMPLATE_PATH = "check_run.pdf"
 
 GS_SPREADSHEET_NAME = "Check Issuance History"  # Google 表格的名字
 GS_WORKSHEET_NAME = "Sheet1"                  # 历史记录工作表的名字
@@ -163,12 +163,12 @@ def get_pdf_template_bytes(account_num, custom_uploaded_bytes=None):
         return custom_uploaded_bytes
     
     # 判断账号是否为 ACC-3738
-    if str(account_num).strip().upper() == "ACC-3738":
-        if os.path.exists(ACC_3738_TEMPLATE_PATH):
-            with open(ACC_3738_TEMPLATE_PATH, "rb") as f:
+    if str(account_num).strip().upper() == "ACC-8652":
+        if os.path.exists(ACC_8652_TEMPLATE_PATH):
+            with open(ACC_8652_TEMPLATE_PATH, "rb") as f:
                 return f.read()
         else:
-            st.warning(f"⚠️ 未找到 `{ACC_3738_TEMPLATE_PATH}` 模板文件，已回退使用默认模板。")
+            st.warning(f"⚠️ 未找到 `{ACC_8652_TEMPLATE_PATH}` 模板文件，已回退使用默认模板。")
 
     # 默认模板加载
     if os.path.exists(DEFAULT_TEMPLATE_PATH):
