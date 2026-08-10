@@ -348,104 +348,104 @@ if mode == "📝 Single Mannul Check":
 
         # 分支 1：Construction 逻辑
        if main_category == "🏗️ Construction":
-        project_options = preset_project_list + ["+ New Project"]
+            project_options = preset_project_list + ["+ New Project"]
+            
+            # 定义回调函数：当选择 Project 或 Payee 发生变化时，强行改变 Stage 下拉框的值
+            def update_single_check_stage():
+                cur_payee = st.session_state.get("single_payee_select", "")
+                cur_proj = st.session_state.get("single_proj_select", "")
+                
+                # 特殊拦截：如果是 Valente Herrera，默认固定为 Salary
+                if cur_payee == "Valente Herrera":
+                    st.session_state["single_check_main_stage"] = "Salary"  # 根据你的实际下拉选项调整，如 "99: Salary" 或 "Salary"
+                    st.session_state["single_check_sub_stage_1"] = "Payroll" # 根据实际子阶段调整
+                    return
         
-        # 定义回调函数：当选择 Project 或 Payee 发生变化时，强行改变 Stage 下拉框的值
-        def update_single_check_stage():
-            cur_payee = st.session_state.get("single_payee_select", "")
-            cur_proj = st.session_state.get("single_proj_select", "")
-            
-            # 特殊拦截：如果是 Valente Herrera，默认固定为 Salary
-            if cur_payee == "Valente Herrera":
-                st.session_state["single_check_main_stage"] = "Salary"  # 根据你的实际下拉选项调整，如 "99: Salary" 或 "Salary"
-                st.session_state["single_check_sub_stage_1"] = "Payroll" # 根据实际子阶段调整
-                return
-    
-            # 获取原默认值
-            orig_stg, orig_sname, orig_sub = "", "", ""
-            if not df_workers.empty and cur_payee in df_workers["Worker_Name"].values:
-                w_info = df_workers[df_workers["Worker_Name"] == cur_payee].iloc[0]
-                orig_stg = w_info.get("Stage", "")
-                orig_sname = w_info.get("Stage_Name", "")
-                orig_sub = w_info.get("Sub_Stage", "")
-            
-            # 计算拦截联动值
-            auto_stg, auto_sname, auto_sub = auto_match_stage(cur_payee, cur_proj, orig_stg, orig_sname, orig_sub)
-            
-            # 强行重置界面 Session State 中的下拉框属性
-            st.session_state["single_check_main_stage"] = f"{auto_stg}: {auto_sname}"
-            st.session_state["single_check_sub_stage_1"] = auto_sub
-    
-        # 收款人选择模式 (提到前面先渲染/选择，以便 Project 根据 Payee 动态调整，也可以保持原顺序)
-        payee_mode = st.radio(
-            "Payee Input Mode",
-            ["List Selection", "Custom Input"],
-            index=0,
-            horizontal=True
-        )
-    
-        if payee_mode == "List Selection" and preset_worker_list:
-            payee_name = st.selectbox(
-                "Payee Name", 
-                options=preset_worker_list,
-                key="single_payee_select",
-                on_change=update_single_check_stage
+                # 获取原默认值
+                orig_stg, orig_sname, orig_sub = "", "", ""
+                if not df_workers.empty and cur_payee in df_workers["Worker_Name"].values:
+                    w_info = df_workers[df_workers["Worker_Name"] == cur_payee].iloc[0]
+                    orig_stg = w_info.get("Stage", "")
+                    orig_sname = w_info.get("Stage_Name", "")
+                    orig_sub = w_info.get("Sub_Stage", "")
+                
+                # 计算拦截联动值
+                auto_stg, auto_sname, auto_sub = auto_match_stage(cur_payee, cur_proj, orig_stg, orig_sname, orig_sub)
+                
+                # 强行重置界面 Session State 中的下拉框属性
+                st.session_state["single_check_main_stage"] = f"{auto_stg}: {auto_sname}"
+                st.session_state["single_check_sub_stage_1"] = auto_sub
+        
+            # 收款人选择模式 (提到前面先渲染/选择，以便 Project 根据 Payee 动态调整，也可以保持原顺序)
+            payee_mode = st.radio(
+                "Payee Input Mode",
+                ["List Selection", "Custom Input"],
+                index=0,
+                horizontal=True
             )
-            if not df_workers.empty and payee_name in df_workers["Worker_Name"].values:
-                w_info = df_workers[df_workers["Worker_Name"] == payee_name].iloc[0]
-                def_stg = w_info.get("Stage", "")
-                def_stg_name = w_info.get("Stage_Name", "")
-                def_sub_stg = w_info.get("Sub_Stage", "")
-        else:
-            payee_name = st.text_input("Payee Name", value="", placeholder="Enter payee full name")
-    
-        # 特殊处理：判断是否为固定薪资工人
-        is_valente = (payee_name == "Valente Herrera")
-    
-        # 根据 Payee 判断 Project 输入逻辑
-        if is_valente:
-            # 如果是 Valente Herrera，无需选择 Project
-            selected_proj = "None (Salary)"
-            project_site = "N/A"
-            default_chk_val = 1001
-            project_account = "ACC-8652"
-            project_company = "Development Company"
-            st.warning("⚠️ **Valente Herrera** 默认为内部固定薪资发薪（Salary），不关联任何具体施工项目。")
-        else:
-            selected_proj = st.selectbox(
-                "Project", 
-                project_options, 
-                key="single_proj_select",
-                on_change=update_single_check_stage
-            )
-    
-            if selected_proj != "+ New Project":
-                project_site = selected_proj
-                default_chk_val = latest_check_map.get(selected_proj, 1001)
-                p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
-                project_account = str(p_info.get("Account", "ACC-5027")).strip()
-                project_company = str(p_info.get("Company", "Development Company")).strip()
+        
+            if payee_mode == "List Selection" and preset_worker_list:
+                payee_name = st.selectbox(
+                    "Payee Name", 
+                    options=preset_worker_list,
+                    key="single_payee_select",
+                    on_change=update_single_check_stage
+                )
+                if not df_workers.empty and payee_name in df_workers["Worker_Name"].values:
+                    w_info = df_workers[df_workers["Worker_Name"] == payee_name].iloc[0]
+                    def_stg = w_info.get("Stage", "")
+                    def_stg_name = w_info.get("Stage_Name", "")
+                    def_sub_stg = w_info.get("Sub_Stage", "")
             else:
-                project_site = st.text_input("Project Name", value="New Site")
+                payee_name = st.text_input("Payee Name", value="", placeholder="Enter payee full name")
+        
+            # 特殊处理：判断是否为固定薪资工人
+            is_valente = (payee_name == "Valente Herrera")
+        
+            # 根据 Payee 判断 Project 输入逻辑
+            if is_valente:
+                # 如果是 Valente Herrera，无需选择 Project
+                selected_proj = "None (Salary)"
+                project_site = "N/A"
                 default_chk_val = 1001
                 project_account = "ACC-8652"
                 project_company = "Development Company"
-    
-        payer_entity = st.selectbox(
-            "Payer Entity",
-            options=["Development Company", "Moo Construction"],
-            index=0,
-            help="选择付款主体"
-        )
-    
-        if payer_entity == "Moo Construction":
-            company_name = "Moo Construction"
-            account_num = "Chase-1185"
-            st.info("💡 **Moo Construction** 付款账户已自动固定为: `Chase-1185`")
-        else:
-            company_name = project_company
-            account_num = project_account
-            st.info(f"💡 **Development Company** 已自动使用项目对应的公司 (`{company_name}`) 与账户 (`{account_num}`)")
+                st.warning("⚠️ **Valente Herrera** 默认为内部固定薪资发薪（Salary），不关联任何具体施工项目。")
+            else:
+                selected_proj = st.selectbox(
+                    "Project", 
+                    project_options, 
+                    key="single_proj_select",
+                    on_change=update_single_check_stage
+                )
+        
+                if selected_proj != "+ New Project":
+                    project_site = selected_proj
+                    default_chk_val = latest_check_map.get(selected_proj, 1001)
+                    p_info = df_projects[df_projects["Project_Name"] == selected_proj].iloc[0]
+                    project_account = str(p_info.get("Account", "ACC-5027")).strip()
+                    project_company = str(p_info.get("Company", "Development Company")).strip()
+                else:
+                    project_site = st.text_input("Project Name", value="New Site")
+                    default_chk_val = 1001
+                    project_account = "ACC-8652"
+                    project_company = "Development Company"
+        
+            payer_entity = st.selectbox(
+                "Payer Entity",
+                options=["Development Company", "Moo Construction"],
+                index=0,
+                help="选择付款主体"
+            )
+        
+            if payer_entity == "Moo Construction":
+                company_name = "Moo Construction"
+                account_num = "Chase-1185"
+                st.info("💡 **Moo Construction** 付款账户已自动固定为: `Chase-1185`")
+            else:
+                company_name = project_company
+                account_num = project_account
+                st.info(f"💡 **Development Company** 已自动使用项目对应的公司 (`{company_name}`) 与账户 (`{account_num}`)")
 
         # 分支 2：Moo Housing 逻辑
         else:
