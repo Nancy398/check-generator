@@ -408,7 +408,7 @@ if mode == "📝 Single Mannul Check":
                 selected_proj = "None (Salary)"
                 project_site = "N/A"
                 default_chk_val = 1001
-                project_account = "ACC-8652"
+                project_account = "ACC-5027"
                 project_company = "Development Company"
                 st.warning("⚠️ **Valente Herrera** 默认为内部固定薪资发薪（Salary），不关联任何具体施工项目。")
             else:
@@ -428,7 +428,7 @@ if mode == "📝 Single Mannul Check":
                 else:
                     project_site = st.text_input("Project Name", value="New Site")
                     default_chk_val = 1001
-                    project_account = "ACC-8652"
+                    project_account = "ACC-5027"
                     project_company = "Development Company"
         
             payer_entity = st.selectbox(
@@ -674,7 +674,7 @@ elif mode == "👷 Construction Bulk Checks":
     if "input_acc" not in st.session_state and preset_project_list:
         first_p = preset_project_list[0]
         p_info = df_projects[df_projects["Project_Name"] == first_p].iloc[0]
-        st.session_state.input_acc = str(p_info.get("Account", "ACC-8652")).strip()
+        st.session_state.input_acc = str(p_info.get("Account", "ACC-5027")).strip()
 
     if "input_m" not in st.session_state and preset_worker_list:
         first_w = preset_worker_list[0]
