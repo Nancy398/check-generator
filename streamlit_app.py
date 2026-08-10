@@ -347,7 +347,7 @@ if mode == "📝 Single Mannul Check":
         def_stg, def_stg_name, def_sub_stg = "", "", ""
 
         # 分支 1：Construction 逻辑
-       if main_category == "🏗️ Construction":
+        if main_category == "🏗️ Construction":
             project_options = preset_project_list + ["+ New Project"]
             
             # 定义回调函数：当选择 Project 或 Payee 发生变化时，强行改变 Stage 下拉框的值
