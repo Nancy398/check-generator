@@ -118,8 +118,8 @@ def load_project_presets():
     df_p = read_file(GS_SPREADSHEET_NAME, "Project")
     
     extra_projects = pd.DataFrame([
-        {"Project_Name": "83 Patrician Way", "Company": "Development Company", "Account": "ACC-8652"},
-        {"Project_Name": "365 San Gabrial", "Company": "Development Company", "Account": "ACC-8652"},
+        {"Project_Name": "83 Patrician Way", "Company": "Development Company", "Account": "ACC-5027"},
+        {"Project_Name": "365 San Gabrial", "Company": "Development Company", "Account": "ACC-5027"},
     ])
 
     if df_p.empty or "Project_Name" not in df_p.columns:
