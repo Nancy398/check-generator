@@ -708,7 +708,7 @@ elif mode == "👷 Construction Bulk Checks":
             on_change=update_bulk_stage_and_memo
         )
 
-    # 动态判断：若选择 Valente Herrera 则 Project 不显示可选项/禁用
+    # 动态判断：若选择 Valente Herrera 则 Project 置空且禁选
     is_valente = (add_worker == "Valente Herrera")
     project_options = [""] if is_valente else preset_project_list
 
@@ -717,7 +717,7 @@ elif mode == "👷 Construction Bulk Checks":
             "Project", 
             project_options, 
             key="input_p",
-            disabled=is_valente, # 如果是 Valente Herrera 则置灰禁用
+            disabled=is_valente, # 如果是 Valente Herrera 则禁用下拉框
             on_change=update_account_and_company
         )
     with r1_c4:
@@ -770,7 +770,7 @@ elif mode == "👷 Construction Bulk Checks":
     with r2_c5:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("➕ Add", type="primary", use_container_width=True):
-            # 特殊情况处理：Valente Herrera 的 Project 存空字符串
+            # Valente Herrera 场景下，确保 Project 字段为空
             final_project_val = "" if add_worker == "Valente Herrera" else add_proj
 
             existing_checks = [
@@ -798,7 +798,7 @@ elif mode == "👷 Construction Bulk Checks":
             st.session_state.payroll_list.append({
                 "Company": final_company_val,
                 "Payee": add_worker,
-                "Project": final_project_val,  # 写入空字符串
+                "Project": final_project_val,  # 存入空字符串
                 "Account": add_account,
                 "Stage": stage_val_str,
                 "Days": add_days if add_days > 0 else None,
@@ -849,6 +849,7 @@ elif mode == "👷 Construction Bulk Checks":
                 else:
                     account_num = str(row.get("Account", "")).strip() or str(p_info.get("Account", "ACC-8652")).strip()
 
+                # Memo 智能拼接：Project 为空时仅打印 detail_memo
                 if project_name and detail_memo:
                     full_memo = f"{project_name} - {detail_memo}"
                 elif project_name:
@@ -878,7 +879,7 @@ elif mode == "👷 Construction Bulk Checks":
                     "Issue Date": pay_date.strftime("%Y-%m-%d"),
                     "Company": company_name,
                     "Account": account_num,
-                    "Project": project_name,
+                    "Project": project_name, # 空项目正常保留空字符串记录
                     "Stage": stage_name,
                     "Payee Name": worker_name,
                     "Amount": amt,
