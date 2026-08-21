@@ -619,350 +619,350 @@ elif mode == "👷 Construction Bulk Checks":
             )
 
     st.markdown("---")
-    
-        # ----------------- 2. 快捷添加面板 -----------------
-        st.subheader("2. Information")
-    
-        if "payroll_list" not in st.session_state:
-            st.session_state.payroll_list = []
-    
-        def update_bulk_stage_and_memo():
-            selected_w = st.session_state.get("input_w", "")
-            selected_p = st.session_state.get("input_p", "")
-            
-            if selected_w == "Valente Herrera":
-                st.session_state.input_p = ""
-                selected_p = ""
-            
-            w_stg, w_stg_name, w_sub_stg = "", "", ""
-            if not df_workers.empty and selected_w in df_workers["Worker_Name"].values:
-                w_info = df_workers[df_workers["Worker_Name"] == selected_w].iloc[0]
-                w_stg = w_info.get("Stage", "")
-                w_stg_name = w_info.get("Stage_Name", "")
-                w_sub_stg = w_info.get("Sub_Stage", "")
-                
-            auto_stg, auto_sname, auto_sub = auto_match_stage(selected_w, selected_p, w_stg, w_stg_name, w_sub_stg)
-            
-            st.session_state["bulk_check_main_stage"] = f"{auto_stg}: {auto_sname}"
-            st.session_state["bulk_check_sub_stage_1"] = auto_sub
-            
-            st.session_state.input_m = f"{auto_sname} - {auto_sub}" if auto_sub else auto_sname
-    
-        def update_account_and_company():
-            c_type = st.session_state.get("input_company_type", "Development Company")
-            selected_p = st.session_state.get("input_p", "")
-    
-            if c_type == "Moo Construction":
-                st.session_state.input_acc = "Chase-1185"
-            elif c_type == "Moo Housing":
-                st.session_state.input_acc = "ACC-8652"
-            else:
-                if not df_projects.empty and selected_p in df_projects["Project_Name"].values:
-                    p_info = df_projects[df_projects["Project_Name"] == selected_p].iloc[0]
-                    st.session_state.input_acc = str(p_info.get("Account", "ACC-8652")).strip()
-            
-            update_bulk_stage_and_memo()
-    
-        def calculate_amount_from_days():
-            days = st.session_state.get("input_days", 0.0)
-            rate = st.session_state.get("input_rate", 0.0)
-            if days > 0 and rate > 0:
-                st.session_state.input_a = round(days * rate, 2)
-    
-        if "input_company_type" not in st.session_state:
-            st.session_state.input_company_type = "Development Company"
-    
-        if "input_acc" not in st.session_state and preset_project_list:
-            first_p = preset_project_list[0]
-            p_info = df_projects[df_projects["Project_Name"] == first_p].iloc[0]
-            st.session_state.input_acc = str(p_info.get("Account", "ACC-5027")).strip()
-    
-        if "input_m" not in st.session_state and preset_worker_list:
-            first_w = preset_worker_list[0]
-            first_p = preset_project_list[0] if preset_project_list else ""
-            if not df_workers.empty and first_w in df_workers["Worker_Name"].values:
-                w_info = df_workers[df_workers["Worker_Name"] == first_w].iloc[0]
-                _, auto_sname, auto_sub = auto_match_stage(first_w, first_p, w_info.get("Stage", ""), w_info.get("Stage_Name", ""), w_info.get("Sub_Stage", ""))
-                st.session_state.input_m = f"{auto_sname} - {auto_sub}" if auto_sub else auto_sname
-    
-        st.markdown("##### ➕ New Check")
+
+    # ----------------- 2. 快捷添加面板 -----------------
+    st.subheader("2. Information")
+
+    if "payroll_list" not in st.session_state:
+        st.session_state.payroll_list = []
+
+    def update_bulk_stage_and_memo():
+        selected_w = st.session_state.get("input_w", "")
+        selected_p = st.session_state.get("input_p", "")
         
-        r1_c1, r1_c2, r1_c3, r1_c4 = st.columns([1.2, 1, 1, 1])
-        with r1_c1:
-            add_comp_type = st.selectbox(
-                "Paying Entity",
-                options=["Development Company", "Moo Housing", "Moo Construction"],
-                index=0,
-                key="input_company_type",
-                on_change=update_account_and_company
-            )
-        with r1_c2:
-            add_worker = st.selectbox(
-                "Payee Name", 
-                preset_worker_list, 
-                key="input_w",
-                on_change=update_bulk_stage_and_memo
-            )
-    
-        is_valente = (add_worker == "Valente Herrera")
-        project_options = [""] if is_valente else preset_project_list
-    
-        with r1_c3:
-            add_proj = st.selectbox(
-                "Project", 
-                project_options, 
-                key="input_p",
-                disabled=is_valente,
-                on_change=update_account_and_company
-            )
-        with r1_c4:
-            add_account = st.text_input("Bank Account", key="input_acc")
-    
+        if selected_w == "Valente Herrera":
+            st.session_state.input_p = ""
+            selected_p = ""
+        
         w_stg, w_stg_name, w_sub_stg = "", "", ""
-        if not df_workers.empty and add_worker in df_workers["Worker_Name"].values:
-            w_info = df_workers[df_workers["Worker_Name"] == add_worker].iloc[0]
+        if not df_workers.empty and selected_w in df_workers["Worker_Name"].values:
+            w_info = df_workers[df_workers["Worker_Name"] == selected_w].iloc[0]
             w_stg = w_info.get("Stage", "")
             w_stg_name = w_info.get("Stage_Name", "")
             w_sub_stg = w_info.get("Sub_Stage", "")
-    
-        w_stg, w_stg_name, w_sub_stg = auto_match_stage(
-            add_worker, add_proj, w_stg, w_stg_name, w_sub_stg
-        )
-    
-        st_code, st_name, sub1, sub2 = render_stage_selector(
-            key_prefix="bulk_check",
-            default_stage=w_stg,
-            default_stage_name=w_stg_name,
-            default_sub_stage=w_sub_stg
-        )
-    
-        r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns([1.5, 1.5, 2.0, 3.0, 1.2])
-        with r2_c1:
-            add_days = st.number_input(
-                "Days (Opt)", 
-                min_value=0.0, 
-                value=0.0, 
-                step=0.5, 
-                key="input_days",
-                on_change=calculate_amount_from_days
-            )
-        with r2_c2:
-            add_rate = st.number_input(
-                "Rate/Day (Opt)", 
-                min_value=0.0, 
-                value=0.0, 
-                step=10.0, 
-                key="input_rate",
-                on_change=calculate_amount_from_days
-            )
-        with r2_c3:
-            add_amt = st.number_input("Total Amount", min_value=0.01, value=1200.00, step=50.0, key="input_a")
-        with r2_c4:
-            add_memo = st.text_input("Memo Detail", key="input_m")
-        with r2_c5:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("➕ Add", type="primary", use_container_width=True):
-                final_project_val = "" if add_worker == "Valente Herrera" else add_proj
-    
-                existing_checks = [
-                    row["Check #"] 
-                    for row in st.session_state.payroll_list 
-                    if row["Project"] == final_project_val
-                ]
-                
-                if existing_checks:
-                    next_chk = max(existing_checks) + 1
-                else:
-                    next_chk = proj_start_nums.get(final_project_val, 1001)
-    
-                stage_val_str = f"{st_code} ({f'{sub1}, {sub2}' if sub2 else sub1})" if st_code else ""
-    
-                if add_comp_type == "Development Company":
-                    if not df_projects.empty and final_project_val in df_projects["Project_Name"].values:
-                        p_row_info = df_projects[df_projects["Project_Name"] == final_project_val].iloc[0]
-                        final_company_val = str(p_row_info.get("Company", "Development Company")).strip()
-                    else:
-                        final_company_val = "Development Company"
-                else:
-                    final_company_val = add_comp_type
-    
-                st.session_state.payroll_list.append({
-                    "Company": final_company_val,
-                    "Payee": add_worker,
-                    "Project": final_project_val,
-                    "Account": add_account,
-                    "Stage": stage_val_str,
-                    "Days": add_days if add_days > 0 else None,
-                    "Rate": add_rate if add_rate > 0 else None,
-                    "Check #": int(next_chk),
-                    "Amount": add_amt,
-                    "Memo": add_memo
-                })
-                st.rerun()
-    
-        st.markdown("---")
-    
-        # ----------------- 3. 待打款列表预览与编辑 -----------------
-        st.subheader("3. Review & Edit")
-    
-        col_title, col_clear = st.columns([8, 2])
-        with col_clear:
-            if st.session_state.payroll_list:
-                if st.button("🗑️ Clear List", type="secondary", use_container_width=True):
-                    st.session_state.payroll_list = []
-                    st.rerun()
-    
-        df_payroll_input = pd.DataFrame(st.session_state.payroll_list)
-    
-        if not df_payroll_input.empty:
-            edited_df = st.data_editor(
-                df_payroll_input,
-                num_rows="dynamic",
-                use_container_width=True,
-                column_config={
-                    "Company": st.column_config.SelectboxColumn("Company", options=["Development Company", "Moo Housing", "Moo Construction"], required=True),
-                    "Payee": st.column_config.SelectboxColumn("Payee", options=preset_worker_list, required=True),
-                    "Project": st.column_config.SelectboxColumn("Project", options=[""] + preset_project_list),
-                    "Check #": st.column_config.NumberColumn("Check #", format="%d"),
-                    "Amount": st.column_config.NumberColumn("Amount", format="$%.2f"),
-                    "Days": st.column_config.NumberColumn("Days", format="%.1f"),
-                    "Rate": st.column_config.NumberColumn("Rate", format="$%.2f")
-                },
-                key="payroll_data_editor"
-            )
-            df_payroll_input = edited_df
+            
+        auto_stg, auto_sname, auto_sub = auto_match_stage(selected_w, selected_p, w_stg, w_stg_name, w_sub_stg)
+        
+        st.session_state["bulk_check_main_stage"] = f"{auto_stg}: {auto_sname}"
+        st.session_state["bulk_check_sub_stage_1"] = auto_sub
+        
+        st.session_state.input_m = f"{auto_sname} - {auto_sub}" if auto_sub else auto_sname
+
+    def update_account_and_company():
+        c_type = st.session_state.get("input_company_type", "Development Company")
+        selected_p = st.session_state.get("input_p", "")
+
+        if c_type == "Moo Construction":
+            st.session_state.input_acc = "Chase-1185"
+        elif c_type == "Moo Housing":
+            st.session_state.input_acc = "ACC-8652"
         else:
-            st.info("💡 暂无待处理支票，请在上方添加数据。")
+            if not df_projects.empty and selected_p in df_projects["Project_Name"].values:
+                p_info = df_projects[df_projects["Project_Name"] == selected_p].iloc[0]
+                st.session_state.input_acc = str(p_info.get("Account", "ACC-8652")).strip()
+        
+        update_bulk_stage_and_memo()
+
+    def calculate_amount_from_days():
+        days = st.session_state.get("input_days", 0.0)
+        rate = st.session_state.get("input_rate", 0.0)
+        if days > 0 and rate > 0:
+            st.session_state.input_a = round(days * rate, 2)
+
+    if "input_company_type" not in st.session_state:
+        st.session_state.input_company_type = "Development Company"
+
+    if "input_acc" not in st.session_state and preset_project_list:
+        first_p = preset_project_list[0]
+        p_info = df_projects[df_projects["Project_Name"] == first_p].iloc[0]
+        st.session_state.input_acc = str(p_info.get("Account", "ACC-5027")).strip()
+
+    if "input_m" not in st.session_state and preset_worker_list:
+        first_w = preset_worker_list[0]
+        first_p = preset_project_list[0] if preset_project_list else ""
+        if not df_workers.empty and first_w in df_workers["Worker_Name"].values:
+            w_info = df_workers[df_workers["Worker_Name"] == first_w].iloc[0]
+            _, auto_sname, auto_sub = auto_match_stage(first_w, first_p, w_info.get("Stage", ""), w_info.get("Stage_Name", ""), w_info.get("Sub_Stage", ""))
+            st.session_state.input_m = f"{auto_sname} - {auto_sub}" if auto_sub else auto_sname
+
+    st.markdown("##### ➕ New Check")
     
-        st.markdown("---")
-    
-        # ----------------- 4. 批量生成与导出 -----------------
-        if not df_payroll_input.empty:
-            if st.button(f"🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks", type="primary", use_container_width=True):
-                account_pdf_dict = {}
-                records_log = []
-    
-                proj_map = df_projects.set_index("Project_Name").to_dict(orient="index") if not df_projects.empty else {}
-    
-                for idx, row in df_payroll_input.iterrows():
-                    worker_name = str(row.get("Payee", "")).strip()
-                    project_name = str(row.get("Project", "")).strip()
-                    stage_name = str(row.get("Stage", "")).strip()
-                    
-                    try:
-                        cur_check = int(row.get("Check #", 0))
-                        amt = float(row.get("Amount", 0.0))
-                    except (ValueError, TypeError):
-                        cur_check = 0
-                        amt = 0.0
-    
-                    detail_memo = str(row.get("Memo", "")).strip()
-    
-                    if amt <= 0 or not worker_name or cur_check <= 0:
-                        continue
-    
-                    p_info = proj_map.get(project_name, {"Account": "ACC-8652", "Company": "Development Company"})
-                    
-                    company_name = str(row.get("Company", "")).strip()
-                    if not company_name or company_name == "Development Company":
-                        company_name = str(p_info.get("Company", "Development Company")).strip()
-                    
-                    if company_name == "Moo Construction":
-                        account_num = "Chase-1185"
-                    elif company_name == "Moo Housing":
-                        account_num = str(row.get("Account", "")).strip() or "ACC-8652"
-                    else:
-                        account_num = str(row.get("Account", "")).strip() or str(p_info.get("Account", "ACC-8652")).strip()
-    
-                    if project_name and detail_memo:
-                        full_memo = f"{project_name} - {detail_memo}"
-                    elif project_name:
-                        full_memo = project_name
-                    else:
-                        full_memo = detail_memo
-    
-                    replacements = {
-                        "date": pay_date.strftime("%m/%d/%Y"),
-                        "name": worker_name,
-                        "amount": f"{amt:,.2f}",
-                        "amount_words": number_to_words_usd(amt),
-                        "memo": full_memo,
-                        "number": str(cur_check),
-                        "account": account_num
-                    }
-    
-                    pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
-                    
-                    acc_key = (company_name, account_num)
-                    if acc_key not in account_pdf_dict:
-                        account_pdf_dict[acc_key] = []
-                    account_pdf_dict[acc_key].append((cur_check, project_name, worker_name, pdf_res))
-    
-                    records_log.append({
-                        "Check Number": cur_check,
-                        "Issue Date": pay_date.strftime("%Y-%m-%d"),
-                        "Company": company_name,
-                        "Account": account_num,
-                        "Project": project_name,
-                        "Stage": stage_name,
-                        "Payee Name": worker_name,
-                        "Amount": amt,
-                        "Memo": full_memo
-                    })
-    
-                if records_log:
-                    # 提示：保存生成的 PDF 到 session_state 以防止重新渲染时丢失
-                    st.session_state.last_generated_pdfs = account_pdf_dict
-                    
-                    if save_to_history(records_log):
-                        st.session_state.payroll_list = []
-    
-                        st.balloons()
-                        st.success(f"🎉 Successfully generated {len(records_log)} check(s)! Data synced to Google Sheets.")
-    
-                        st.markdown("### 📊 Current Period Disbursement Summary")
-                        df_batch = pd.DataFrame(records_log)
-                        col_sum1, col_sum2 = st.columns(2)
-    
-                        with col_sum1:
-                            st.markdown("#### 🏢 Summary by Company / Account")
-                            summary_company = df_batch.groupby(["Company", "Account"]).agg(
-                                **{
-                                    "Total Amount": ("Amount", "sum"),
-                                    "Total Number": ("Check Number", "count")
-                                }
-                            ).reset_index()
-                            st.dataframe(summary_company.style.format({"Total Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
-    
-                        with col_sum2:
-                            st.markdown("#### 🏗️ Summary by Project")
-                            summary_project = df_batch.groupby(["Project", "Company"]).agg(
-                                **{
-                                    "Total Labor Cost": ("Amount", "sum"),
-                                    "Worker Count": ("Check Number", "count")
-                                }
-                            ).reset_index()
-                            st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
-    
-        # ----------------- 5. 显示 PDF 下载区域 -----------------
-        if "last_generated_pdfs" in st.session_state and st.session_state.last_generated_pdfs:
-            st.markdown("---")
-            st.markdown("### ⬇️ Download Generated PDF Checks")
+    r1_c1, r1_c2, r1_c3, r1_c4 = st.columns([1.2, 1, 1, 1])
+    with r1_c1:
+        add_comp_type = st.selectbox(
+            "Paying Entity",
+            options=["Development Company", "Moo Housing", "Moo Construction"],
+            index=0,
+            key="input_company_type",
+            on_change=update_account_and_company
+        )
+    with r1_c2:
+        add_worker = st.selectbox(
+            "Payee Name", 
+            preset_worker_list, 
+            key="input_w",
+            on_change=update_bulk_stage_and_memo
+        )
+
+    is_valente = (add_worker == "Valente Herrera")
+    project_options = [""] if is_valente else preset_project_list
+
+    with r1_c3:
+        add_proj = st.selectbox(
+            "Project", 
+            project_options, 
+            key="input_p",
+            disabled=is_valente,
+            on_change=update_account_and_company
+        )
+    with r1_c4:
+        add_account = st.text_input("Bank Account", key="input_acc")
+
+    w_stg, w_stg_name, w_sub_stg = "", "", ""
+    if not df_workers.empty and add_worker in df_workers["Worker_Name"].values:
+        w_info = df_workers[df_workers["Worker_Name"] == add_worker].iloc[0]
+        w_stg = w_info.get("Stage", "")
+        w_stg_name = w_info.get("Stage_Name", "")
+        w_sub_stg = w_info.get("Sub_Stage", "")
+
+    w_stg, w_stg_name, w_sub_stg = auto_match_stage(
+        add_worker, add_proj, w_stg, w_stg_name, w_sub_stg
+    )
+
+    st_code, st_name, sub1, sub2 = render_stage_selector(
+        key_prefix="bulk_check",
+        default_stage=w_stg,
+        default_stage_name=w_stg_name,
+        default_sub_stage=w_sub_stg
+    )
+
+    r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns([1.5, 1.5, 2.0, 3.0, 1.2])
+    with r2_c1:
+        add_days = st.number_input(
+            "Days (Opt)", 
+            min_value=0.0, 
+            value=0.0, 
+            step=0.5, 
+            key="input_days",
+            on_change=calculate_amount_from_days
+        )
+    with r2_c2:
+        add_rate = st.number_input(
+            "Rate/Day (Opt)", 
+            min_value=0.0, 
+            value=0.0, 
+            step=10.0, 
+            key="input_rate",
+            on_change=calculate_amount_from_days
+        )
+    with r2_c3:
+        add_amt = st.number_input("Total Amount", min_value=0.01, value=1200.00, step=50.0, key="input_a")
+    with r2_c4:
+        add_memo = st.text_input("Memo Detail", key="input_m")
+    with r2_c5:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("➕ Add", type="primary", use_container_width=True):
+            final_project_val = "" if add_worker == "Valente Herrera" else add_proj
+
+            existing_checks = [
+                row["Check #"] 
+                for row in st.session_state.payroll_list 
+                if row["Project"] == final_project_val
+            ]
             
-            pdf_dict = st.session_state.last_generated_pdfs
-            
-            # 逐个公司/账户渲染下载按钮
-            for (comp, acc), chk_list in pdf_dict.items():
-                st.write(f"**🏢 {comp} ({acc})** - Total Checks: {len(chk_list)}")
+            if existing_checks:
+                next_chk = max(existing_checks) + 1
+            else:
+                next_chk = proj_start_nums.get(final_project_val, 1001)
+
+            stage_val_str = f"{st_code} ({f'{sub1}, {sub2}' if sub2 else sub1})" if st_code else ""
+
+            if add_comp_type == "Development Company":
+                if not df_projects.empty and final_project_val in df_projects["Project_Name"].values:
+                    p_row_info = df_projects[df_projects["Project_Name"] == final_project_val].iloc[0]
+                    final_company_val = str(p_row_info.get("Company", "Development Company")).strip()
+                else:
+                    final_company_val = "Development Company"
+            else:
+                final_company_val = add_comp_type
+
+            st.session_state.payroll_list.append({
+                "Company": final_company_val,
+                "Payee": add_worker,
+                "Project": final_project_val,
+                "Account": add_account,
+                "Stage": stage_val_str,
+                "Days": add_days if add_days > 0 else None,
+                "Rate": add_rate if add_rate > 0 else None,
+                "Check #": int(next_chk),
+                "Amount": add_amt,
+                "Memo": add_memo
+            })
+            st.rerun()
+
+    st.markdown("---")
+
+    # ----------------- 3. 待打款列表预览与编辑 -----------------
+    st.subheader("3. Review & Edit")
+
+    col_title, col_clear = st.columns([8, 2])
+    with col_clear:
+        if st.session_state.payroll_list:
+            if st.button("🗑️ Clear List", type="secondary", use_container_width=True):
+                st.session_state.payroll_list = []
+                st.rerun()
+
+    df_payroll_input = pd.DataFrame(st.session_state.payroll_list)
+
+    if not df_payroll_input.empty:
+        edited_df = st.data_editor(
+            df_payroll_input,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "Company": st.column_config.SelectboxColumn("Company", options=["Development Company", "Moo Housing", "Moo Construction"], required=True),
+                "Payee": st.column_config.SelectboxColumn("Payee", options=preset_worker_list, required=True),
+                "Project": st.column_config.SelectboxColumn("Project", options=[""] + preset_project_list),
+                "Check #": st.column_config.NumberColumn("Check #", format="%d"),
+                "Amount": st.column_config.NumberColumn("Amount", format="$%.2f"),
+                "Days": st.column_config.NumberColumn("Days", format="%.1f"),
+                "Rate": st.column_config.NumberColumn("Rate", format="$%.2f")
+            },
+            key="payroll_data_editor"
+        )
+        df_payroll_input = edited_df
+    else:
+        st.info("💡 暂无待处理支票，请在上方添加数据。")
+
+    st.markdown("---")
+
+    # ----------------- 4. 批量生成与导出 -----------------
+    if not df_payroll_input.empty:
+        if st.button(f"🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks", type="primary", use_container_width=True):
+            account_pdf_dict = {}
+            records_log = []
+
+            proj_map = df_projects.set_index("Project_Name").to_dict(orient="index") if not df_projects.empty else {}
+
+            for idx, row in df_payroll_input.iterrows():
+                worker_name = str(row.get("Payee", "")).strip()
+                project_name = str(row.get("Project", "")).strip()
+                stage_name = str(row.get("Stage", "")).strip()
                 
-                for chk_num, proj, payee, pdf_bytes in chk_list:
-                    file_label = f"📄 Download Check #{chk_num} - {payee} ({proj or 'No Project'})"
-                    file_name = f"Check_{chk_num}_{payee.replace(' ', '_')}.pdf"
-                    
-                    st.download_button(
-                        label=file_label,
-                        data=pdf_bytes,
-                        file_name=file_name,
-                        mime="application/pdf",
-                        key=f"dl_pdf_{chk_num}_{acc}"
-                    )
+                try:
+                    cur_check = int(row.get("Check #", 0))
+                    amt = float(row.get("Amount", 0.0))
+                except (ValueError, TypeError):
+                    cur_check = 0
+                    amt = 0.0
+
+                detail_memo = str(row.get("Memo", "")).strip()
+
+                if amt <= 0 or not worker_name or cur_check <= 0:
+                    continue
+
+                p_info = proj_map.get(project_name, {"Account": "ACC-8652", "Company": "Development Company"})
+                
+                company_name = str(row.get("Company", "")).strip()
+                if not company_name or company_name == "Development Company":
+                    company_name = str(p_info.get("Company", "Development Company")).strip()
+                
+                if company_name == "Moo Construction":
+                    account_num = "Chase-1185"
+                elif company_name == "Moo Housing":
+                    account_num = str(row.get("Account", "")).strip() or "ACC-8652"
+                else:
+                    account_num = str(row.get("Account", "")).strip() or str(p_info.get("Account", "ACC-8652")).strip()
+
+                if project_name and detail_memo:
+                    full_memo = f"{project_name} - {detail_memo}"
+                elif project_name:
+                    full_memo = project_name
+                else:
+                    full_memo = detail_memo
+
+                replacements = {
+                    "date": pay_date.strftime("%m/%d/%Y"),
+                    "name": worker_name,
+                    "amount": f"{amt:,.2f}",
+                    "amount_words": number_to_words_usd(amt),
+                    "memo": full_memo,
+                    "number": str(cur_check),
+                    "account": account_num
+                }
+
+                pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
+                
+                acc_key = (company_name, account_num)
+                if acc_key not in account_pdf_dict:
+                    account_pdf_dict[acc_key] = []
+                account_pdf_dict[acc_key].append((cur_check, project_name, worker_name, pdf_res))
+
+                records_log.append({
+                    "Check Number": cur_check,
+                    "Issue Date": pay_date.strftime("%Y-%m-%d"),
+                    "Company": company_name,
+                    "Account": account_num,
+                    "Project": project_name,
+                    "Stage": stage_name,
+                    "Payee Name": worker_name,
+                    "Amount": amt,
+                    "Memo": full_memo
+                })
+
+            if records_log:
+                # 提示：保存生成的 PDF 到 session_state 以防止重新渲染时丢失
+                st.session_state.last_generated_pdfs = account_pdf_dict
+                
+                if save_to_history(records_log):
+                    st.session_state.payroll_list = []
+
+                    st.balloons()
+                    st.success(f"🎉 Successfully generated {len(records_log)} check(s)! Data synced to Google Sheets.")
+
+                    st.markdown("### 📊 Current Period Disbursement Summary")
+                    df_batch = pd.DataFrame(records_log)
+                    col_sum1, col_sum2 = st.columns(2)
+
+                    with col_sum1:
+                        st.markdown("#### 🏢 Summary by Company / Account")
+                        summary_company = df_batch.groupby(["Company", "Account"]).agg(
+                            **{
+                                "Total Amount": ("Amount", "sum"),
+                                "Total Number": ("Check Number", "count")
+                            }
+                        ).reset_index()
+                        st.dataframe(summary_company.style.format({"Total Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
+
+                    with col_sum2:
+                        st.markdown("#### 🏗️ Summary by Project")
+                        summary_project = df_batch.groupby(["Project", "Company"]).agg(
+                            **{
+                                "Total Labor Cost": ("Amount", "sum"),
+                                "Worker Count": ("Check Number", "count")
+                            }
+                        ).reset_index()
+                        st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
+
+    # ----------------- 5. 显示 PDF 下载区域 -----------------
+    if "last_generated_pdfs" in st.session_state and st.session_state.last_generated_pdfs:
+        st.markdown("---")
+        st.markdown("### ⬇️ Download Generated PDF Checks")
+        
+        pdf_dict = st.session_state.last_generated_pdfs
+        
+        # 逐个公司/账户渲染下载按钮
+        for (comp, acc), chk_list in pdf_dict.items():
+            st.write(f"**🏢 {comp} ({acc})** - Total Checks: {len(chk_list)}")
+            
+            for chk_num, proj, payee, pdf_bytes in chk_list:
+                file_label = f"📄 Download Check #{chk_num} - {payee} ({proj or 'No Project'})"
+                file_name = f"Check_{chk_num}_{payee.replace(' ', '_')}.pdf"
+                
+                st.download_button(
+                    label=file_label,
+                    data=pdf_bytes,
+                    file_name=file_name,
+                    mime="application/pdf",
+                    key=f"dl_pdf_{chk_num}_{acc}"
+                )
