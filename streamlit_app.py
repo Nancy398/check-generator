@@ -945,3 +945,26 @@ elif mode == "👷 Construction Bulk Checks":
                         st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
 
                     st.markdown("---")
+
+            # ----------------- 5. 显示 PDF 下载区域 -----------------
+            if "last_generated_pdfs" in st.session_state and st.session_state.last_generated_pdfs:
+                st.markdown("---")
+                st.markdown("### ⬇️ Download Generated PDF Checks")
+                
+                pdf_dict = st.session_state.last_generated_pdfs
+                
+                # 逐个公司/账户渲染下载按钮
+                for (comp, acc), chk_list in pdf_dict.items():
+                    st.write(f"**🏢 {comp} ({acc})** - Total Checks: {len(chk_list)}")
+                    
+                    for chk_num, proj, payee, pdf_bytes in chk_list:
+                        file_label = f"📄 Download Check #{chk_num} - {payee} ({proj or 'No Project'})"
+                        file_name = f"Check_{chk_num}_{payee.replace(' ', '_')}.pdf"
+                        
+                        st.download_button(
+                            label=file_label,
+                            data=pdf_bytes,
+                            file_name=file_name,
+                            mime="application/pdf",
+                            key=f"dl_pdf_{chk_num}_{acc}"
+                        )
