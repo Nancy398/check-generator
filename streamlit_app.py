@@ -810,6 +810,7 @@ elif mode == "👷 Construction Bulk Checks":
             st.rerun()
 
     st.markdown("---")
+    df_payroll_input = pd.DataFrame(st.session_state.payroll_list)
     
     # ----------------- 4. 批量生成与导出 -----------------
     if not df_payroll_input.empty:
