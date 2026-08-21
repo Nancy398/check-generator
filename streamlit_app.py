@@ -626,12 +626,10 @@ elif mode == "👷 Construction Bulk Checks":
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
 
-    # 核心联动：更新 Worker 或 Project 时同时更新 Stage 下拉菜单 UI 与 Memo 内容
     def update_bulk_stage_and_memo():
         selected_w = st.session_state.get("input_w", "")
         selected_p = st.session_state.get("input_p", "")
         
-        # 特殊规则：如果 Worker 是 Valente Herrera，强制 Project 清空
         if selected_w == "Valente Herrera":
             st.session_state.input_p = ""
             selected_p = ""
@@ -645,11 +643,9 @@ elif mode == "👷 Construction Bulk Checks":
             
         auto_stg, auto_sname, auto_sub = auto_match_stage(selected_w, selected_p, w_stg, w_stg_name, w_sub_stg)
         
-        # 强制重置界面 Session State 中的 Stage 下拉框选项
         st.session_state["bulk_check_main_stage"] = f"{auto_stg}: {auto_sname}"
         st.session_state["bulk_check_sub_stage_1"] = auto_sub
         
-        # 同步更新 Memo 文本框
         st.session_state.input_m = f"{auto_sname} - {auto_sub}" if auto_sub else auto_sname
 
     def update_account_and_company():
@@ -708,7 +704,6 @@ elif mode == "👷 Construction Bulk Checks":
             on_change=update_bulk_stage_and_memo
         )
 
-    # 动态判断：若选择 Valente Herrera 则 Project 置空且禁选
     is_valente = (add_worker == "Valente Herrera")
     project_options = [""] if is_valente else preset_project_list
 
@@ -717,14 +712,11 @@ elif mode == "👷 Construction Bulk Checks":
             "Project", 
             project_options, 
             key="input_p",
-            disabled=is_valente, # 如果是 Valente Herrera 则禁用下拉框
+            disabled=is_valente,
             on_change=update_account_and_company
         )
     with r1_c4:
-        add_account = st.text_input(
-            "Bank Account", 
-            key="input_acc"
-        )
+        add_account = st.text_input("Bank Account", key="input_acc")
 
     w_stg, w_stg_name, w_sub_stg = "", "", ""
     if not df_workers.empty and add_worker in df_workers["Worker_Name"].values:
@@ -770,7 +762,6 @@ elif mode == "👷 Construction Bulk Checks":
     with r2_c5:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("➕ Add", type="primary", use_container_width=True):
-            # Valente Herrera 场景下，确保 Project 字段为空
             final_project_val = "" if add_worker == "Valente Herrera" else add_proj
 
             existing_checks = [
@@ -798,7 +789,7 @@ elif mode == "👷 Construction Bulk Checks":
             st.session_state.payroll_list.append({
                 "Company": final_company_val,
                 "Payee": add_worker,
-                "Project": final_project_val,  # 存入空字符串
+                "Project": final_project_val,
                 "Account": add_account,
                 "Stage": stage_val_str,
                 "Days": add_days if add_days > 0 else None,
@@ -810,8 +801,44 @@ elif mode == "👷 Construction Bulk Checks":
             st.rerun()
 
     st.markdown("---")
+
+    # ----------------- 3. 待打款列表预览与编辑 (补上这部分) -----------------
+    st.subheader("3. Review & Edit")
+
+    col_title, col_clear = st.columns([8, 2])
+    with col_clear:
+        if st.session_state.payroll_list:
+            if st.button("🗑️ Clear List", type="secondary", use_container_width=True):
+                st.session_state.payroll_list = []
+                st.rerun()
+
     df_payroll_input = pd.DataFrame(st.session_state.payroll_list)
-    
+
+    if not df_payroll_input.empty:
+        # 使用 st.data_editor 让用户可以在表格中直接二次修改/删除
+        edited_df = st.data_editor(
+            df_payroll_input,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "Company": st.column_config.SelectboxColumn("Company", options=["Development Company", "Moo Housing", "Moo Construction"], required=True),
+                "Payee": st.column_config.SelectboxColumn("Payee", options=preset_worker_list, required=True),
+                "Project": st.column_config.SelectboxColumn("Project", options=[""] + preset_project_list),
+                "Check #": st.column_config.NumberColumn("Check #", format="%d"),
+                "Amount": st.column_config.NumberColumn("Amount", format="$%.2f"),
+                "Days": st.column_config.NumberColumn("Days", format="%.1f"),
+                "Rate": st.column_config.NumberColumn("Rate", format="$%.2f")
+            },
+            key="payroll_data_editor"
+        )
+        
+        # 将编辑后的 DataFrame 写回 session_state，供第4部分提交使用
+        df_payroll_input = edited_df
+    else:
+        st.info("💡 暂无待处理支票，请在上方添加数据。")
+
+    st.markdown("---")
+
     # ----------------- 4. 批量生成与导出 -----------------
     if not df_payroll_input.empty:
         if st.button(f"🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks", type="primary", use_container_width=True):
@@ -850,7 +877,6 @@ elif mode == "👷 Construction Bulk Checks":
                 else:
                     account_num = str(row.get("Account", "")).strip() or str(p_info.get("Account", "ACC-8652")).strip()
 
-                # Memo 智能拼接：Project 为空时仅打印 detail_memo
                 if project_name and detail_memo:
                     full_memo = f"{project_name} - {detail_memo}"
                 elif project_name:
@@ -880,7 +906,7 @@ elif mode == "👷 Construction Bulk Checks":
                     "Issue Date": pay_date.strftime("%Y-%m-%d"),
                     "Company": company_name,
                     "Account": account_num,
-                    "Project": project_name, # 空项目正常保留空字符串记录
+                    "Project": project_name,
                     "Stage": stage_name,
                     "Payee Name": worker_name,
                     "Amount": amt,
