@@ -631,6 +631,11 @@ elif mode == "👷 Construction Bulk Checks":
         selected_w = st.session_state.get("input_w", "")
         selected_p = st.session_state.get("input_p", "")
         
+        # 特殊规则：如果 Worker 是 Valente Herrera，强制 Project 清空
+        if selected_w == "Valente Herrera":
+            st.session_state.input_p = ""
+            selected_p = ""
+        
         w_stg, w_stg_name, w_sub_stg = "", "", ""
         if not df_workers.empty and selected_w in df_workers["Worker_Name"].values:
             w_info = df_workers[df_workers["Worker_Name"] == selected_w].iloc[0]
@@ -702,11 +707,17 @@ elif mode == "👷 Construction Bulk Checks":
             key="input_w",
             on_change=update_bulk_stage_and_memo
         )
+
+    # 动态判断：若选择 Valente Herrera 则 Project 不显示可选项/禁用
+    is_valente = (add_worker == "Valente Herrera")
+    project_options = [""] if is_valente else preset_project_list
+
     with r1_c3:
         add_proj = st.selectbox(
             "Project", 
-            preset_project_list, 
+            project_options, 
             key="input_p",
+            disabled=is_valente, # 如果是 Valente Herrera 则置灰禁用
             on_change=update_account_and_company
         )
     with r1_c4:
@@ -759,22 +770,25 @@ elif mode == "👷 Construction Bulk Checks":
     with r2_c5:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("➕ Add", type="primary", use_container_width=True):
+            # 特殊情况处理：Valente Herrera 的 Project 存空字符串
+            final_project_val = "" if add_worker == "Valente Herrera" else add_proj
+
             existing_checks = [
                 row["Check #"] 
                 for row in st.session_state.payroll_list 
-                if row["Project"] == add_proj
+                if row["Project"] == final_project_val
             ]
             
             if existing_checks:
                 next_chk = max(existing_checks) + 1
             else:
-                next_chk = proj_start_nums.get(add_proj, 1001)
+                next_chk = proj_start_nums.get(final_project_val, 1001)
 
             stage_val_str = f"{st_code} ({f'{sub1}, {sub2}' if sub2 else sub1})" if st_code else ""
 
             if add_comp_type == "Development Company":
-                if not df_projects.empty and add_proj in df_projects["Project_Name"].values:
-                    p_row_info = df_projects[df_projects["Project_Name"] == add_proj].iloc[0]
+                if not df_projects.empty and final_project_val in df_projects["Project_Name"].values:
+                    p_row_info = df_projects[df_projects["Project_Name"] == final_project_val].iloc[0]
                     final_company_val = str(p_row_info.get("Company", "Development Company")).strip()
                 else:
                     final_company_val = "Development Company"
@@ -784,7 +798,7 @@ elif mode == "👷 Construction Bulk Checks":
             st.session_state.payroll_list.append({
                 "Company": final_company_val,
                 "Payee": add_worker,
-                "Project": add_proj,
+                "Project": final_project_val,  # 写入空字符串
                 "Account": add_account,
                 "Stage": stage_val_str,
                 "Days": add_days if add_days > 0 else None,
@@ -794,43 +808,6 @@ elif mode == "👷 Construction Bulk Checks":
                 "Memo": add_memo
             })
             st.rerun()
-
-    st.markdown("---")
-
-    # --- 3. 数据列表展示与编辑 ---
-    if st.session_state.payroll_list:
-        st.markdown(f"##### 📋 List of Pending Checks ({len(st.session_state.payroll_list)} total):")
-        
-        df_current = pd.DataFrame(st.session_state.payroll_list)
-
-        edited_df = st.data_editor(
-            df_current,
-            num_rows="dynamic",
-            use_container_width=True,
-            key="payroll_table_editor",
-            column_config={
-                "Company": st.column_config.TextColumn("Company"),
-                "Payee": st.column_config.SelectboxColumn("Payee", options=preset_worker_list),
-                "Project": st.column_config.SelectboxColumn("Project", options=preset_project_list),
-                "Account": st.column_config.TextColumn("Account"),
-                "Stage": st.column_config.TextColumn("Stage"),
-                "Days": st.column_config.NumberColumn("Days", format="%.1f days"),
-                "Rate": st.column_config.NumberColumn("Rate/Day", format="$%.2f"),
-                "Check #": st.column_config.NumberColumn("Check #", format="%d"),
-                "Amount": st.column_config.NumberColumn("Amount", format="$%.2f")
-            }
-        )
-
-        st.session_state.payroll_list = edited_df.to_dict(orient="records")
-
-        if st.button("🗑️ Clear", type="secondary"):
-            st.session_state.payroll_list = []
-            st.rerun()
-
-        df_payroll_input = edited_df
-    else:
-        st.info("💡 No data in the list. Please select a worker and project above, then click **[➕ Add]** to add team members.")
-        df_payroll_input = pd.DataFrame()
 
     st.markdown("---")
     
