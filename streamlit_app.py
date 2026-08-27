@@ -841,9 +841,9 @@ elif mode == "👷 Construction Bulk Checks":
         if st.button(f"🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks", type="primary", use_container_width=True):
             account_pdf_dict = {}
             records_log = []
-
+    
             proj_map = df_projects.set_index("Project_Name").to_dict(orient="index") if not df_projects.empty else {}
-
+    
             for idx, row in df_payroll_input.iterrows():
                 worker_name = str(row.get("Payee", "")).strip()
                 project_name = str(row.get("Project", "")).strip()
@@ -855,12 +855,12 @@ elif mode == "👷 Construction Bulk Checks":
                 except (ValueError, TypeError):
                     cur_check = 0
                     amt = 0.0
-
+    
                 detail_memo = str(row.get("Memo", "")).strip()
-
+    
                 if amt <= 0 or not worker_name or cur_check <= 0:
                     continue
-
+    
                 p_info = proj_map.get(project_name, {"Account": "ACC-8652", "Company": "Development Company"})
                 
                 company_name = str(row.get("Company", "")).strip()
@@ -873,14 +873,14 @@ elif mode == "👷 Construction Bulk Checks":
                     account_num = str(row.get("Account", "")).strip() or "ACC-8652"
                 else:
                     account_num = str(row.get("Account", "")).strip() or str(p_info.get("Account", "ACC-8652")).strip()
-
+    
                 if project_name and detail_memo:
                     full_memo = f"{project_name} - {detail_memo}"
                 elif project_name:
                     full_memo = project_name
                 else:
                     full_memo = detail_memo
-
+    
                 replacements = {
                     "date": pay_date.strftime("%m/%d/%Y"),
                     "name": worker_name,
@@ -890,14 +890,14 @@ elif mode == "👷 Construction Bulk Checks":
                     "number": str(cur_check),
                     "account": account_num
                 }
-
+    
                 pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
                 
                 acc_key = (company_name, account_num)
                 if acc_key not in account_pdf_dict:
                     account_pdf_dict[acc_key] = []
                 account_pdf_dict[acc_key].append((cur_check, project_name, worker_name, pdf_res))
-
+    
                 records_log.append({
                     "Check Number": cur_check,
                     "Issue Date": pay_date.strftime("%Y-%m-%d"),
@@ -909,21 +909,42 @@ elif mode == "👷 Construction Bulk Checks":
                     "Amount": amt,
                     "Memo": full_memo
                 })
-
+    
             if records_log:
-                # 提示：保存生成的 PDF 到 session_state 以防止重新渲染时丢失
-                st.session_state.last_generated_pdfs = account_pdf_dict
-                
+                # ----------------- 新增：按账户合并 PDF -----------------
+                merged_account_pdfs = {}
+    
+                for (company, acc_num), items in account_pdf_dict.items():
+                    # 按照 Check Number (cur_check) 升序排序，保证连号输出
+                    sorted_items = sorted(items, key=lambda x: x[0])
+                    
+                    merger = PdfMerger()
+                    for item in sorted_items:
+                        pdf_bytes = item[3]  # 单张支票的 PDF Bytes
+                        merger.append(io.BytesIO(pdf_bytes))
+                    
+                    merged_output = io.BytesIO()
+                    merger.write(merged_output)
+                    merger.close()
+                    merged_output.seek(0)
+                    
+                    # 存储合并后的 PDF 二进制数据
+                    merged_account_pdfs[(company, acc_num)] = merged_output.getvalue()
+    
+                # 将合并后的 PDF 结果存入 session_state
+                st.session_state.last_generated_pdfs = merged_account_pdfs
+                # ------------------------------------------------------
+    
                 if save_to_history(records_log):
                     st.session_state.payroll_list = []
-
+    
                     st.balloons()
                     st.success(f"🎉 Successfully generated {len(records_log)} check(s)! Data synced to Google Sheets.")
-
+    
                     st.markdown("### 📊 Current Period Disbursement Summary")
                     df_batch = pd.DataFrame(records_log)
                     col_sum1, col_sum2 = st.columns(2)
-
+    
                     with col_sum1:
                         st.markdown("#### 🏢 Summary by Company / Account")
                         summary_company = df_batch.groupby(["Company", "Account"]).agg(
@@ -933,7 +954,7 @@ elif mode == "👷 Construction Bulk Checks":
                             }
                         ).reset_index()
                         st.dataframe(summary_company.style.format({"Total Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
-
+    
                     with col_sum2:
                         st.markdown("#### 🏗️ Summary by Project")
                         summary_project = df_batch.groupby(["Project", "Company"]).agg(
@@ -943,6 +964,8 @@ elif mode == "👷 Construction Bulk Checks":
                             }
                         ).reset_index()
                         st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
+    
+
 
     # ----------------- 5. 显示 PDF 下载区域 -----------------
     if "last_generated_pdfs" in st.session_state and st.session_state.last_generated_pdfs:
