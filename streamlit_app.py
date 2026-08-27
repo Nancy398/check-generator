@@ -8,6 +8,7 @@ from num2words import num2words
 import pandas as pd
 import streamlit as st
 import gspread
+from PyPDF2 import PdfMerger
 from google.oauth2.service_account import Credentials
 
 # ----------------- 页面配置 -----------------
