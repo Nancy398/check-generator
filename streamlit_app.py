@@ -3,6 +3,7 @@ from datetime import date
 import io
 import os
 import zipfile
+import re
 import fitz
 from num2words import num2words
 import pandas as pd
@@ -19,6 +20,8 @@ st.set_page_config(
 # ----------------- 配置文件与路径定义 -----------------
 DEFAULT_TEMPLATE_PATH = "check_run_3738.pdf"
 ACC_8652_TEMPLATE_PATH = "check_run.pdf"
+LAKEVIEW_TEMPLATE_PATH = "check_run_lakeview.pdf"
+# Lakeview 使用无固定 MICR 图像的模板；MICR 仅生成测试版可视文本。
 
 GS_SPREADSHEET_NAME = "Check Issuance History"  # Google 表格的名字
 GS_WORKSHEET_NAME = "Sheet1"                  # 历史记录工作表的名字
@@ -158,24 +161,70 @@ def load_stage_presets():
 
     return df_combined
     
-def get_pdf_template_bytes(account_num, custom_uploaded_bytes=None):
-    """根据账号匹配对应的 PDF 模板，如果上传了自定义模板则优先使用"""
-    if custom_uploaded_bytes:
-        return custom_uploaded_bytes
-    
-    # 判断账号是否为 ACC-3738
-    if str(account_num).strip().upper() == "ACC-8652":
-        if os.path.exists(ACC_8652_TEMPLATE_PATH):
-            with open(ACC_8652_TEMPLATE_PATH, "rb") as f:
-                return f.read()
-        else:
-            st.warning(f"⚠️ 未找到 `{ACC_8652_TEMPLATE_PATH}` 模板文件，已回退使用默认模板。")
+def is_lakeview(company_name, account_num=""):
+    """根据 Project sheet 的 Company 识别 Lakeview，不依赖虚构的账号。"""
+    normalized = " ".join(str(company_name or "").upper().replace("_", " ").split())
+    return "LAKE VIEW" in normalized or "LAKEVIEW" in normalized
 
-    # 默认模板加载
-    if os.path.exists(DEFAULT_TEMPLATE_PATH):
-        with open(DEFAULT_TEMPLATE_PATH, "rb") as f:
-            return f.read()
-    return None
+
+def get_pdf_template_info(account_num, company_name="", custom_uploaded_bytes=None):
+    """按 Company / Account 选择模板。返回 (pdf_bytes, filename, is_lakeview)。"""
+    if custom_uploaded_bytes is not None:
+        return custom_uploaded_bytes, "Uploaded Override Template", False
+
+    if is_lakeview(company_name, account_num):
+        path = LAKEVIEW_TEMPLATE_PATH
+        lakeview = True
+    elif str(account_num).strip().upper() == "ACC-8652":
+        path = ACC_8652_TEMPLATE_PATH
+        lakeview = False
+    else:
+        path = DEFAULT_TEMPLATE_PATH
+        lakeview = False
+
+    if not os.path.exists(path):
+        st.error(f"❌ 未找到账户对应的模板：{path}（Company: {company_name}, Account: {account_num}）")
+        return None, path, lakeview
+    with open(path, "rb") as f:
+        return f.read(), path, lakeview
+
+
+def get_pdf_template_bytes(account_num, custom_uploaded_bytes=None, company_name=""):
+    return get_pdf_template_info(account_num, company_name, custom_uploaded_bytes)[0]
+
+
+def project_bank_details(project_name):
+    """从 Project 工作表读取文本格式的真实银行字段，不做猜测。"""
+    matches = df_projects[df_projects["Project_Name"] == project_name]
+    if matches.empty:
+        return "", ""
+    row = matches.iloc[0]
+    return str(row.get("Routing_Number", "")).strip(), str(row.get("Account_Number", "")).strip()
+
+
+def add_lakeview_micr_proof(pdf_bytes, routing, bank_account, check_number):
+    """测试输出：三项自动读取并更新；不是磁性 MICR 编码，永远 VOID。"""
+    routing = str(routing).strip()
+    bank_account = str(bank_account).strip()
+    check_number = str(check_number).strip()
+    if not re.fullmatch(r"[0-9]{9}", routing):
+        raise ValueError("Project Sheet 的 Routing_Number 必须是9位数字（文本格式）")
+    if not re.fullmatch(r"[0-9]{1,20}", bank_account):
+        raise ValueError("Project Sheet 的 Account_Number 必须是1-20位数字（文本格式）")
+    if not re.fullmatch(r"[0-9]+", check_number):
+        raise ValueError("Check Number 必须是数字")
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    for page in doc:
+        # 原模板的 MICR 区域已清空；这里输出可核对的可视测试信息。
+        page.draw_rect(fitz.Rect(92, 217, 520, 240),color=None,fill=(1,1,1),overlay=True)
+        line = f"ROUTING {routing}    ACCOUNT {bank_account}    CHECK {check_number}"
+        size = min(10, 420 / max(fitz.get_text_length(line,fontname="cour",fontsize=10),1)*10)
+        page.insert_text((97,232),line,fontsize=size,fontname="cour",color=(0,0,0),overlay=True)
+        page.insert_text((210,405),"TEST ONLY - VOID",fontsize=24,fontname="hebo",color=(.75,.08,.08),overlay=True)
+    result=doc.tobytes(garbage=4,deflate=True)
+    doc.close()
+    return result
+
 
 # 加载云端预设数据
 df_projects = load_project_presets()
@@ -329,8 +378,6 @@ if mode == "📝 Single Mannul Check":
     st.title("📝 Single Mannul Check")
     st.caption("Please enter the information")
 
-    if not pdf_template_bytes:
-        st.stop()
     col1, col2 = st.columns(2)
 
     with col1:
@@ -467,7 +514,7 @@ if mode == "📝 Single Mannul Check":
         company_display = st.text_input("Company Display Name", value=company_name)
 
         # 提示用户当前调用的模板文件
-        active_tpl_name = "check_run_3738.pdf" if account_num == "ACC-3738" else "check_run.pdf"
+        _, active_tpl_name, _ = get_pdf_template_info(account_num, company_name, custom_uploaded_bytes)
         st.info(f"📄 当前匹配使用的支票模板: **`{active_tpl_name}`**")
 
         st.markdown("---")
@@ -521,7 +568,9 @@ if mode == "📝 Single Mannul Check":
         amount_words = number_to_words_usd(pay_amount)
 
     # **根据账户名称获取对应模板数据**
-    current_pdf_template_bytes = get_pdf_template_bytes(account_num, custom_uploaded_bytes)
+    current_pdf_template_bytes, active_tpl_name, is_lakeview_template = get_pdf_template_info(
+        account_num, company_name, custom_uploaded_bytes
+    )
 
     if not current_pdf_template_bytes:
         st.error("❌ 无法匹配并加载指定的 PDF 模板，请确认对应 PDF 文件已放置在项目跟目录下。")
@@ -538,6 +587,15 @@ if mode == "📝 Single Mannul Check":
     }
     
     filled_pdf = fill_pdf_placeholders(current_pdf_template_bytes, replacements)
+    if is_lakeview_template:
+        routing, bank_account = project_bank_details(project_site)
+        try:
+            filled_pdf = add_lakeview_micr_proof(filled_pdf, routing, bank_account, check_num)
+        except ValueError as exc:
+            st.error(f"Lakeview 银行资料不完整：{exc}")
+            st.stop()
+        st.warning("Lakeview MICR 测试：底部 Routing / Account / Check # 均从 Sheet 和输入动态生成；"
+                   "仅为可视排版测试，不是银行可读取的 E-13B MICR。PDF 带 TEST ONLY - VOID。")
 
     with col2:
         st.subheader("👁️ Check Preview")
@@ -568,13 +626,16 @@ if mode == "📝 Single Mannul Check":
                     "Memo": memo_text,
                 }
             ]
-            if save_to_history(record):
+            if is_lakeview_template:
+                st.session_state["sync_error_msg"] = "Lakeview 测试 PDF 已下载；未写入正式支票历史。"
+            elif save_to_history(record):
                 st.session_state["sync_success_msg"] = f"🎉 Check #{check_num} Successfully saved & transferred to Google Sheets!"
             else:
                 st.session_state["sync_error_msg"] = f"⚠️ Check #{check_num} PDF downloaded, but failed to sync to Google Sheets."
 
         st.download_button(
-            label=f"🚀 Save to Sheets & Download PDF (#{check_num})",
+            label=(f"🧪 Download Lakeview TEST PDF (#{check_num})" if is_lakeview_template
+                   else f"🚀 Save to Sheets & Download PDF (#{check_num})"),
             data=filled_pdf,
             file_name=f"Check_{check_num}_{payee_name}.pdf",
             mime="application/pdf",
@@ -596,8 +657,6 @@ if mode == "📝 Single Mannul Check":
 elif mode == "👷 Construction Bulk Checks":
     st.title("👷 Construction Bulk Checks")
 
-    if not pdf_template_bytes:
-        st.stop()
 
     pay_date = st.date_input("Date", value=date.today())
 
@@ -821,7 +880,8 @@ elif mode == "👷 Construction Bulk Checks":
             num_rows="dynamic",
             use_container_width=True,
             column_config={
-                "Company": st.column_config.SelectboxColumn("Company", options=["Development Company", "Moo Housing", "Moo Construction"], required=True),
+                "Company": st.column_config.SelectboxColumn("Company", options=sorted(set(["Development Company", "Moo Housing", "Moo Construction"] +
+                                                              df_projects["Company"].dropna().astype(str).tolist())), required=True),
                 "Payee": st.column_config.SelectboxColumn("Payee", options=preset_worker_list, required=True),
                 "Project": st.column_config.SelectboxColumn("Project", options=[""] + preset_project_list),
                 "Check #": st.column_config.NumberColumn("Check #", format="%d"),
@@ -892,13 +952,30 @@ elif mode == "👷 Construction Bulk Checks":
                     "account": account_num
                 }
     
-                pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
+                item_tpl, item_tpl_name, item_is_lakeview = get_pdf_template_info(
+                    account_num, company_name, custom_uploaded_bytes
+                )
+                if item_tpl is None:
+                    st.error(f"跳过 {project_name}：找不到模板 {item_tpl_name}")
+                    continue
+                pdf_res = fill_pdf_placeholders(item_tpl, replacements)
+                if item_is_lakeview:
+                    routing, bank_account = project_bank_details(project_name)
+                    try:
+                        pdf_res = add_lakeview_micr_proof(pdf_res, routing, bank_account, cur_check)
+                    except ValueError as exc:
+                        st.error(f"跳过 {project_name}：{exc}")
+                        continue
                 
                 acc_key = (company_name, account_num)
                 if acc_key not in account_pdf_dict:
                     account_pdf_dict[acc_key] = []
                 account_pdf_dict[acc_key].append((cur_check, project_name, worker_name, pdf_res))
     
+                if item_is_lakeview:
+                    st.warning(f"Lakeview #{cur_check} 已从 Sheet 动态填入底部银行资料；仅生成 VOID 测试版，未加入正式历史。")
+                    continue
+
                 records_log.append({
                     "Check Number": cur_check,
                     "Issue Date": pay_date.strftime("%Y-%m-%d"),
@@ -911,7 +988,7 @@ elif mode == "👷 Construction Bulk Checks":
                     "Memo": full_memo
                 })
     
-            if records_log:
+            if account_pdf_dict:
                 # ----------------- 新增：按账户合并 PDF -----------------
                 merged_account_pdfs = {}
     
@@ -936,35 +1013,39 @@ elif mode == "👷 Construction Bulk Checks":
                 st.session_state.last_generated_pdfs = merged_account_pdfs
                 # ------------------------------------------------------
     
-                if save_to_history(records_log):
+                if not records_log or save_to_history(records_log):
                     st.session_state.payroll_list = []
     
                     st.balloons()
-                    st.success(f"🎉 Successfully generated {len(records_log)} check(s)! Data synced to Google Sheets.")
+                    if records_log:
+                        st.success(f"🎉 {len(records_log)} formal check(s) synced to Google Sheets.")
+                    else:
+                        st.info("🧪 Only Lakeview VOID test PDFs generated; nothing saved to Google Sheets.")
     
                     st.markdown("### 📊 Current Period Disbursement Summary")
                     df_batch = pd.DataFrame(records_log)
-                    col_sum1, col_sum2 = st.columns(2)
+                    if not df_batch.empty:
+                        col_sum1, col_sum2 = st.columns(2)
     
-                    with col_sum1:
-                        st.markdown("#### 🏢 Summary by Company / Account")
-                        summary_company = df_batch.groupby(["Company", "Account"]).agg(
-                            **{
-                                "Total Amount": ("Amount", "sum"),
-                                "Total Number": ("Check Number", "count")
-                            }
-                        ).reset_index()
-                        st.dataframe(summary_company.style.format({"Total Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
+                        with col_sum1:
+                            st.markdown("#### 🏢 Summary by Company / Account")
+                            summary_company = df_batch.groupby(["Company", "Account"]).agg(
+                                **{
+                                    "Total Amount": ("Amount", "sum"),
+                                    "Total Number": ("Check Number", "count")
+                                }
+                            ).reset_index()
+                            st.dataframe(summary_company.style.format({"Total Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
     
-                    with col_sum2:
-                        st.markdown("#### 🏗️ Summary by Project")
-                        summary_project = df_batch.groupby(["Project", "Company"]).agg(
-                            **{
-                                "Total Labor Cost": ("Amount", "sum"),
-                                "Worker Count": ("Check Number", "count")
-                            }
-                        ).reset_index()
-                        st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
+                        with col_sum2:
+                            st.markdown("#### 🏗️ Summary by Project")
+                            summary_project = df_batch.groupby(["Project", "Company"]).agg(
+                                **{
+                                    "Total Labor Cost": ("Amount", "sum"),
+                                    "Worker Count": ("Check Number", "count")
+                                }
+                            ).reset_index()
+                            st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
     
                     st.markdown("### 📥 Download Merged PDF Checks by Account")
                     for (company, acc_num), pdf_data in merged_account_pdfs.items():
