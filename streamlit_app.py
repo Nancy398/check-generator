@@ -220,8 +220,12 @@ def add_lakeview_micr_proof(pdf_bytes, routing, bank_account, check_number):
     for page in doc:
         # 原模板的 MICR 区域已清空；这里输出可核对的可视测试信息。
         page.draw_rect(fitz.Rect(92, 217, 520, 240),color=None,fill=(1,1,1),overlay=True)
-        line = f"ROUTING {routing}    ACCOUNT {bank_account}    CHECK {check_number}"
+        line = f"⑆ {routing} ⑆     {bank_account} ⑈     {check_number} ⑈"
         size = min(10, 420 / max(fitz.get_text_length(line,fontname="cour",fontsize=10),1)*10)
+        # Use ASCII proof glyphs because Helvetica/Courier cannot reliably render MICR separators.
+        # A genuine E-13B font and its symbol mapping must be bank-validated before issuance.
+        line = f"|: {routing} :|    {bank_account} ||    {check_number} ||"
+        size = min(12, 420 / max(fitz.get_text_length(line,fontname="cour",fontsize=12),1)*12)
         page.insert_text((97,232),line,fontsize=size,fontname="cour",color=(0,0,0),overlay=True)
         page.insert_text((210,405),"TEST ONLY - VOID",fontsize=24,fontname="hebo",color=(.75,.08,.08),overlay=True)
     result=doc.tobytes(garbage=4,deflate=True)
@@ -333,12 +337,35 @@ def fill_pdf_placeholders(pdf_bytes, replacements):
                 for rect in rects:
                     page.add_redact_annot(rect, fill=(1, 1, 1))
                     page.apply_redactions()
-                    point = fitz.Point(rect.x0, rect.y1 - 2)
-                    font_size = 10
-                    if key in ("company_name", "bank_name"):
-                        max_width = 235 if key == "company_name" else 230
-                        font_size = min(10, 10 * max_width / max(fitz.get_text_length(str_val, fontname="helv", fontsize=10), 1))
-                    page.insert_text(point, str_val, fontsize=font_size, fontname="helv", color=(0, 0, 0))
+                    if key == "bank_name":
+                        # 银行名称独占右上角 332-480 pt，绝不延伸到支票号 (x=499)。
+                        # 长名称最多两行，必要时自动缩小字号。
+                        target = fitz.Rect(332, 40, 480, 76)
+                        for fs in (10, 9, 8, 7, 6.5):
+                            remaining = page.insert_textbox(target, str_val,
+                                fontsize=fs, fontname="helv", color=(0, 0, 0),
+                                align=fitz.TEXT_ALIGN_CENTER)
+                            if remaining >= 0:
+                                break
+                        else:
+                            raise ValueError("Bank_Name 过长，请在 Sheet 使用银行认可的简写名称")
+                    elif key == "company_name":
+                        target = fitz.Rect(72, 42, 315, 77)
+                        for fs in (10, 9, 8, 7):
+                            remaining = page.insert_textbox(target, str_val,
+                                fontsize=fs, fontname="helv", color=(0, 0, 0))
+                            if remaining >= 0:
+                                break
+                        else:
+                            raise ValueError("Company_Name 太长，请缩短打印名称")
+                    else:
+                        point = fitz.Point(rect.x0, rect.y1 - 2)
+                        font_size = 10
+                        if key == "amount_words":
+                            font_size = min(10, 10 * 420 / max(
+                                fitz.get_text_length(str_val, fontname="helv", fontsize=10), 1))
+                        page.insert_text(point, str_val, fontsize=font_size,
+                                         fontname="helv", color=(0, 0, 0))
     output_stream = io.BytesIO()
     doc.save(output_stream)
     doc.close()
