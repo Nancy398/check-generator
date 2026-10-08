@@ -206,29 +206,61 @@ def project_bank_details(project_name):
 
 
 def add_lakeview_micr_proof(pdf_bytes, routing, bank_account, check_number):
-    """测试输出：三项自动读取并更新；不是磁性 MICR 编码，永远 VOID。"""
+    """Dynamic check-first MICR line. Real E-13B font requires local configuration.
+
+    Default is a visibly VOID proof. For actual MICR rendering, supply an
+    appropriately licensed E-13B font file and its exact symbol character map.
+    Do not treat a PDF as bank-approved without print testing.
+    """
     routing = str(routing).strip()
     bank_account = str(bank_account).strip()
     check_number = str(check_number).strip()
     if not re.fullmatch(r"[0-9]{9}", routing):
-        raise ValueError("Project Sheet 的 Routing_Number 必须是9位数字（文本格式）")
+        raise ValueError("Routing_Number 必须为9位数字；Google Sheets 请设置为纯文本")
     if not re.fullmatch(r"[0-9]{1,20}", bank_account):
-        raise ValueError("Project Sheet 的 Account_Number 必须是1-20位数字（文本格式）")
+        raise ValueError("Account_Number 必须为1-20位数字；Google Sheets 请设置为纯文本")
     if not re.fullmatch(r"[0-9]+", check_number):
         raise ValueError("Check Number 必须是数字")
+
+    import json
+    config_path = "micr_config.json"
+    font_path = "fonts/MICR_E13B.ttf"
+    configured = os.path.isfile(font_path) and os.path.isfile(config_path)
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     for page in doc:
-        # 原模板的 MICR 区域已清空；这里输出可核对的可视测试信息。
-        page.draw_rect(fitz.Rect(92, 217, 520, 240),color=None,fill=(1,1,1),overlay=True)
-        line = f"⑆ {routing} ⑆     {bank_account} ⑈     {check_number} ⑈"
-        size = min(10, 420 / max(fitz.get_text_length(line,fontname="cour",fontsize=10),1)*10)
-        # Use ASCII proof glyphs because Helvetica/Courier cannot reliably render MICR separators.
-        # A genuine E-13B font and its symbol mapping must be bank-validated before issuance.
-        line = f"|: {routing} :|    {bank_account} ||    {check_number} ||"
-        size = min(12, 420 / max(fitz.get_text_length(line,fontname="cour",fontsize=12),1)*12)
-        page.insert_text((97,232),line,fontsize=size,fontname="cour",color=(0,0,0),overlay=True)
-        page.insert_text((210,405),"TEST ONLY - VOID",fontsize=24,fontname="hebo",color=(.75,.08,.08),overlay=True)
-    result=doc.tobytes(garbage=4,deflate=True)
+        # 仅处理支票上方的 MICR 行，模板必须预留该区域。
+        micr_rect = fitz.Rect(90, 215, 525, 244)
+        page.draw_rect(micr_rect, color=None, fill=(1, 1, 1), overlay=True)
+        if configured:
+            with open(config_path, "r", encoding="utf-8") as fp:
+                cfg = json.load(fp)
+            chars = cfg.get("characters", {})
+            # 每款 E-13B 字体的特殊符号映射不同，不允许凭空假设。
+            if not all(k in chars and isinstance(chars[k], str) and len(chars[k]) == 1
+                       for k in ("transit", "on_us")):
+                doc.close()
+                raise ValueError("micr_config.json 必须提供 transit / on_us 的单字符字体映射")
+            # 按用户提供的已兑付样本：Check #、Routing、Account。
+            # 样本符号位置需按实际银行样本复核。
+            line = (chars["on_us"] + check_number + chars["on_us"] + "  "
+                    + chars["transit"] + routing + chars["transit"] + "  "
+                    + chars["on_us"] + bank_account + chars["on_us"])
+            page.insert_font(fontname="CustomMICR", fontfile=font_path)
+            font = fitz.Font(fontfile=font_path)
+            font_size = float(cfg.get("font_size", 12))
+            if font.text_length(line, fontsize=font_size) > 425:
+                doc.close()
+                raise ValueError("MICR 行超出宽度，需按银行样本校准，不能自动缩小 MICR 字体")
+            page.insert_text((95, 232), line, fontsize=font_size,
+                             fontname="CustomMICR", color=(0, 0, 0), overlay=True)
+        else:
+            # 不把普通字体伪装成真正 MICR。
+            line = f"CHECK {check_number}    ROUTING {routing}    ACCOUNT {bank_account}"
+            page.insert_text((95, 232), line, fontsize=9,
+                             fontname="cour", color=(0, 0, 0), overlay=True)
+            page.insert_text((210, 405), "TEST ONLY - VOID", fontsize=24,
+                             fontname="hebo", color=(.75, .08, .08), overlay=True)
+    result = doc.tobytes(garbage=4, deflate=True)
     doc.close()
     return result
 
@@ -634,7 +666,7 @@ if mode == "📝 Single Mannul Check":
             st.error(f"Lakeview 银行资料不完整：{exc}")
             st.stop()
         st.warning("Lakeview MICR 测试：底部 Routing / Account / Check # 均从 Sheet 和输入动态生成；"
-                   "仅为可视排版测试，不是银行可读取的 E-13B MICR。PDF 带 TEST ONLY - VOID。")
+                   "未配置 E-13B 字体时为 VOID 测试版；配置字体后仍需银行验证打印效果。")
 
     with col2:
         st.subheader("👁️ Check Preview")
