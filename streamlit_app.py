@@ -197,9 +197,12 @@ def project_bank_details(project_name):
     """从 Project 工作表读取文本格式的真实银行字段，不做猜测。"""
     matches = df_projects[df_projects["Project_Name"] == project_name]
     if matches.empty:
-        return "", ""
+        return "", "", "", ""
     row = matches.iloc[0]
-    return str(row.get("Routing_Number", "")).strip(), str(row.get("Account_Number", "")).strip()
+    return (str(row.get("Routing_Number", "")).strip(),
+            str(row.get("Account_Number", "")).strip(),
+            str(row.get("Company_Name", "")).strip() or str(row.get("Company", "")).strip(),
+            str(row.get("Bank_Name", "")).strip())
 
 
 def add_lakeview_micr_proof(pdf_bytes, routing, bank_account, check_number):
@@ -331,9 +334,11 @@ def fill_pdf_placeholders(pdf_bytes, replacements):
                     page.add_redact_annot(rect, fill=(1, 1, 1))
                     page.apply_redactions()
                     point = fitz.Point(rect.x0, rect.y1 - 2)
-                    page.insert_text(
-                        point, str_val, fontsize=10, color=(0, 0, 0)
-                    )
+                    font_size = 10
+                    if key in ("company_name", "bank_name"):
+                        max_width = 235 if key == "company_name" else 230
+                        font_size = min(10, 10 * max_width / max(fitz.get_text_length(str_val, fontname="helv", fontsize=10), 1))
+                    page.insert_text(point, str_val, fontsize=font_size, fontname="helv", color=(0, 0, 0))
     output_stream = io.BytesIO()
     doc.save(output_stream)
     doc.close()
@@ -586,9 +591,16 @@ if mode == "📝 Single Mannul Check":
         "account": account_num,
     }
     
+    if is_lakeview_template:
+        routing, bank_account, sheet_company, sheet_bank = project_bank_details(project_site)
+        if not sheet_company or not sheet_bank:
+            st.error("Lakeview 的 Project Sheet 缺少 Company_Name 或 Bank_Name")
+            st.stop()
+        replacements.update({"company_name": sheet_company, "bank_name": sheet_bank})
+
     filled_pdf = fill_pdf_placeholders(current_pdf_template_bytes, replacements)
     if is_lakeview_template:
-        routing, bank_account = project_bank_details(project_site)
+        routing, bank_account, sheet_company, sheet_bank = project_bank_details(project_site)
         try:
             filled_pdf = add_lakeview_micr_proof(filled_pdf, routing, bank_account, check_num)
         except ValueError as exc:
@@ -958,9 +970,15 @@ elif mode == "👷 Construction Bulk Checks":
                 if item_tpl is None:
                     st.error(f"跳过 {project_name}：找不到模板 {item_tpl_name}")
                     continue
+                if item_is_lakeview:
+                    routing, bank_account, sheet_company, sheet_bank = project_bank_details(project_name)
+                    if not sheet_company or not sheet_bank:
+                        st.error(f"跳过 {project_name}：缺少 Company_Name 或 Bank_Name")
+                        continue
+                    replacements.update({"company_name": sheet_company, "bank_name": sheet_bank})
                 pdf_res = fill_pdf_placeholders(item_tpl, replacements)
                 if item_is_lakeview:
-                    routing, bank_account = project_bank_details(project_name)
+                    routing, bank_account, sheet_company, sheet_bank = project_bank_details(project_name)
                     try:
                         pdf_res = add_lakeview_micr_proof(pdf_res, routing, bank_account, cur_check)
                     except ValueError as exc:
