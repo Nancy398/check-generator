@@ -3,7 +3,6 @@ from datetime import date
 import io
 import os
 import zipfile
-import re
 import fitz
 from num2words import num2words
 import pandas as pd
@@ -20,8 +19,6 @@ st.set_page_config(
 # ----------------- 配置文件与路径定义 -----------------
 DEFAULT_TEMPLATE_PATH = "check_run_3738.pdf"
 ACC_8652_TEMPLATE_PATH = "check_run.pdf"
-LAKEVIEW_TEMPLATE_PATH = "check_run_lakeview.pdf"
-# Lakeview 使用无固定 MICR 图像的模板；MICR 仅生成测试版可视文本。
 
 GS_SPREADSHEET_NAME = "Check Issuance History"  # Google 表格的名字
 GS_WORKSHEET_NAME = "Sheet1"                  # 历史记录工作表的名字
@@ -94,7 +91,7 @@ def fetch_next_check_numbers_from_gs(df_p_list, default_start_number=1001):
                 if p_name in max_checks and pd.notnull(max_checks[p_name]):
                     next_numbers[p_name] = int(max_checks[p_name]) + 1
     except Exception as e:
-        st.sidebar.warning(f"⚠️ 读取云端历史推算支票号失败，将使用默认起始号。({e})")
+        st.sidebar.warning(f"⚠ 读取云端历史推算支票号失败，将使用默认起始号。({e})")
 
     for p_name in df_p_list:
         if p_name not in next_numbers:
@@ -138,7 +135,7 @@ def load_worker_presets():
     df_w = read_file(GS_SPREADSHEET_NAME, "Worker")
     required_cols = {"Worker_Name", "Stage", "Stage_Name", "Sub_Stage"}
     if df_w.empty or not required_cols.issubset(df_w.columns):
-        st.warning("⚠️ Worker 表格为空或缺失列！")
+        st.warning("⚠ Worker 表格为空或缺失列！")
         return pd.DataFrame(columns=["Worker_Name", "Stage", "Stage_Name", "Sub_Stage"])
     return df_w
 
@@ -161,109 +158,24 @@ def load_stage_presets():
 
     return df_combined
     
-def is_lakeview(company_name, account_num=""):
-    """根据 Project sheet 的 Company 识别 Lakeview，不依赖虚构的账号。"""
-    normalized = " ".join(str(company_name or "").upper().replace("_", " ").split())
-    return "LAKE VIEW" in normalized or "LAKEVIEW" in normalized
-
-
-def get_pdf_template_info(account_num, company_name="", custom_uploaded_bytes=None):
-    """按 Company / Account 选择模板。返回 (pdf_bytes, filename, is_lakeview)。"""
-    if custom_uploaded_bytes is not None:
-        return custom_uploaded_bytes, "Uploaded Override Template", False
-
-    if is_lakeview(company_name, account_num):
-        path = LAKEVIEW_TEMPLATE_PATH
-        lakeview = True
-    elif str(account_num).strip().upper() == "ACC-8652":
-        path = ACC_8652_TEMPLATE_PATH
-        lakeview = False
-    else:
-        path = DEFAULT_TEMPLATE_PATH
-        lakeview = False
-
-    if not os.path.exists(path):
-        st.error(f"❌ 未找到账户对应的模板：{path}（Company: {company_name}, Account: {account_num}）")
-        return None, path, lakeview
-    with open(path, "rb") as f:
-        return f.read(), path, lakeview
-
-
-def get_pdf_template_bytes(account_num, custom_uploaded_bytes=None, company_name=""):
-    return get_pdf_template_info(account_num, company_name, custom_uploaded_bytes)[0]
-
-
-def project_bank_details(project_name):
-    """从 Project 工作表读取文本格式的真实银行字段，不做猜测。"""
-    matches = df_projects[df_projects["Project_Name"] == project_name]
-    if matches.empty:
-        return "", "", "", ""
-    row = matches.iloc[0]
-    return (str(row.get("Routing_Number", "")).strip(),
-            str(row.get("Account_Number", "")).strip(),
-            str(row.get("Company_Name", "")).strip() or str(row.get("Company", "")).strip(),
-            str(row.get("Bank_Name", "")).strip())
-
-
-def add_lakeview_micr_proof(pdf_bytes, routing, bank_account, check_number):
-    """Dynamic check-first MICR line. Real E-13B font requires local configuration.
-
-    Default is a visibly VOID proof. For actual MICR rendering, supply an
-    appropriately licensed E-13B font file and its exact symbol character map.
-    Do not treat a PDF as bank-approved without print testing.
-    """
-    routing = str(routing).strip()
-    bank_account = str(bank_account).strip()
-    check_number = str(check_number).strip()
-    if not re.fullmatch(r"[0-9]{9}", routing):
-        raise ValueError("Routing_Number 必须为9位数字；Google Sheets 请设置为纯文本")
-    if not re.fullmatch(r"[0-9]{1,20}", bank_account):
-        raise ValueError("Account_Number 必须为1-20位数字；Google Sheets 请设置为纯文本")
-    if not re.fullmatch(r"[0-9]+", check_number):
-        raise ValueError("Check Number 必须是数字")
-
-    import json
-    config_path = "micr_config.json"
-    font_path = "fonts/MICR_E13B.ttf"
-    configured = os.path.isfile(font_path) and os.path.isfile(config_path)
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    for page in doc:
-        # 仅处理支票上方的 MICR 行，模板必须预留该区域。
-        micr_rect = fitz.Rect(90, 215, 525, 244)
-        page.draw_rect(micr_rect, color=None, fill=(1, 1, 1), overlay=True)
-        if configured:
-            with open(config_path, "r", encoding="utf-8") as fp:
-                cfg = json.load(fp)
-            chars = cfg.get("characters", {})
-            # 每款 E-13B 字体的特殊符号映射不同，不允许凭空假设。
-            if not all(k in chars and isinstance(chars[k], str) and len(chars[k]) == 1
-                       for k in ("transit", "on_us")):
-                doc.close()
-                raise ValueError("micr_config.json 必须提供 transit / on_us 的单字符字体映射")
-            # 按用户提供的已兑付样本：Check #、Routing、Account。
-            # 样本符号位置需按实际银行样本复核。
-            line = (chars["on_us"] + check_number + chars["on_us"] + "  "
-                    + chars["transit"] + routing + chars["transit"] + "  "
-                    + chars["on_us"] + bank_account + chars["on_us"])
-            page.insert_font(fontname="CustomMICR", fontfile=font_path)
-            font = fitz.Font(fontfile=font_path)
-            font_size = float(cfg.get("font_size", 12))
-            if font.text_length(line, fontsize=font_size) > 425:
-                doc.close()
-                raise ValueError("MICR 行超出宽度，需按银行样本校准，不能自动缩小 MICR 字体")
-            page.insert_text((95, 232), line, fontsize=font_size,
-                             fontname="CustomMICR", color=(0, 0, 0), overlay=True)
+def get_pdf_template_bytes(account_num, custom_uploaded_bytes=None):
+    """根据账号匹配对应的 PDF 模板，如果上传了自定义模板则优先使用"""
+    if custom_uploaded_bytes:
+        return custom_uploaded_bytes
+    
+    # 判断账号是否为 ACC-3738
+    if str(account_num).strip().upper() == "ACC-8652":
+        if os.path.exists(ACC_8652_TEMPLATE_PATH):
+            with open(ACC_8652_TEMPLATE_PATH, "rb") as f:
+                return f.read()
         else:
-            # 不把普通字体伪装成真正 MICR。
-            line = f"CHECK {check_number}    ROUTING {routing}    ACCOUNT {bank_account}"
-            page.insert_text((95, 232), line, fontsize=9,
-                             fontname="cour", color=(0, 0, 0), overlay=True)
-            page.insert_text((210, 405), "TEST ONLY - VOID", fontsize=24,
-                             fontname="hebo", color=(.75, .08, .08), overlay=True)
-    result = doc.tobytes(garbage=4, deflate=True)
-    doc.close()
-    return result
+            st.warning(f"⚠ 未找到 `{ACC_8652_TEMPLATE_PATH}` 模板文件，已回退使用默认模板。")
 
+    # 默认模板加载
+    if os.path.exists(DEFAULT_TEMPLATE_PATH):
+        with open(DEFAULT_TEMPLATE_PATH, "rb") as f:
+            return f.read()
+    return None
 
 # 加载云端预设数据
 df_projects = load_project_presets()
@@ -369,35 +281,10 @@ def fill_pdf_placeholders(pdf_bytes, replacements):
                 for rect in rects:
                     page.add_redact_annot(rect, fill=(1, 1, 1))
                     page.apply_redactions()
-                    if key == "bank_name":
-                        # 银行名称独占右上角 332-480 pt，绝不延伸到支票号 (x=499)。
-                        # 长名称最多两行，必要时自动缩小字号。
-                        target = fitz.Rect(332, 40, 480, 76)
-                        for fs in (10, 9, 8, 7, 6.5):
-                            remaining = page.insert_textbox(target, str_val,
-                                fontsize=fs, fontname="helv", color=(0, 0, 0),
-                                align=fitz.TEXT_ALIGN_CENTER)
-                            if remaining >= 0:
-                                break
-                        else:
-                            raise ValueError("Bank_Name 过长，请在 Sheet 使用银行认可的简写名称")
-                    elif key == "company_name":
-                        target = fitz.Rect(72, 42, 315, 77)
-                        for fs in (10, 9, 8, 7):
-                            remaining = page.insert_textbox(target, str_val,
-                                fontsize=fs, fontname="helv", color=(0, 0, 0))
-                            if remaining >= 0:
-                                break
-                        else:
-                            raise ValueError("Company_Name 太长，请缩短打印名称")
-                    else:
-                        point = fitz.Point(rect.x0, rect.y1 - 2)
-                        font_size = 10
-                        if key == "amount_words":
-                            font_size = min(10, 10 * 420 / max(
-                                fitz.get_text_length(str_val, fontname="helv", fontsize=10), 1))
-                        page.insert_text(point, str_val, fontsize=font_size,
-                                         fontname="helv", color=(0, 0, 0))
+                    point = fitz.Point(rect.x0, rect.y1 - 2)
+                    page.insert_text(
+                        point, str_val, fontsize=10, color=(0, 0, 0)
+                    )
     output_stream = io.BytesIO()
     doc.save(output_stream)
     doc.close()
@@ -422,7 +309,7 @@ if os.path.exists(DEFAULT_TEMPLATE_PATH):
         pdf_template_bytes = f.read()
 
 # ----------------- 页面架构 -----------------
-st.sidebar.title("⚙️ 系统导航")
+st.sidebar.title("⚙ 系统导航")
 mode = st.sidebar.radio(
     "请选择业务场景：",
     [
@@ -442,6 +329,8 @@ if mode == "📝 Single Mannul Check":
     st.title("📝 Single Mannul Check")
     st.caption("Please enter the information")
 
+    if not pdf_template_bytes:
+        st.stop()
     col1, col2 = st.columns(2)
 
     with col1:
@@ -449,7 +338,7 @@ if mode == "📝 Single Mannul Check":
 
         main_category = st.radio(
             "Business Category：",
-            ["🏗️ Construction", "🏠 Moo Housing"],
+            ["🏗 Construction", "🏠 Moo Housing"],
             index=0,
             horizontal=True,
         )
@@ -459,7 +348,7 @@ if mode == "📝 Single Mannul Check":
         def_stg, def_stg_name, def_sub_stg = "", "", ""
 
         # 分支 1：Construction 逻辑
-        if main_category == "🏗️ Construction":
+        if main_category == "🏗 Construction":
             project_options = preset_project_list + ["+ New Project"]
             
             # 定义回调函数：当选择 Project 或 Payee 发生变化时，强行改变 Stage 下拉框的值
@@ -522,7 +411,7 @@ if mode == "📝 Single Mannul Check":
                 default_chk_val = 1001
                 project_account = "ACC-5027"
                 project_company = "Development Company"
-                st.warning("⚠️ **Valente Herrera** 默认为内部固定薪资发薪（Salary），不关联任何具体施工项目。")
+                st.warning("⚠ **Valente Herrera** 默认为内部固定薪资发薪（Salary），不关联任何具体施工项目。")
             else:
                 selected_proj = st.selectbox(
                     "Project", 
@@ -578,7 +467,7 @@ if mode == "📝 Single Mannul Check":
         company_display = st.text_input("Company Display Name", value=company_name)
 
         # 提示用户当前调用的模板文件
-        _, active_tpl_name, _ = get_pdf_template_info(account_num, company_name, custom_uploaded_bytes)
+        active_tpl_name = "check_run_3738.pdf" if account_num == "ACC-3738" else "check_run.pdf"
         st.info(f"📄 当前匹配使用的支票模板: **`{active_tpl_name}`**")
 
         st.markdown("---")
@@ -591,7 +480,7 @@ if mode == "📝 Single Mannul Check":
                 payee_name, project_site, def_stg, def_stg_name, def_sub_stg
             )
 
-            st.markdown("##### 🏗️ 工程阶段 (Stage Selection)")
+            st.markdown("##### 🏗 工程阶段 (Stage Selection)")
             st_code, st_name, sub1, sub2 = render_stage_selector(
                 key_prefix="single_check",
                 default_stage=def_stg,
@@ -632,9 +521,7 @@ if mode == "📝 Single Mannul Check":
         amount_words = number_to_words_usd(pay_amount)
 
     # **根据账户名称获取对应模板数据**
-    current_pdf_template_bytes, active_tpl_name, is_lakeview_template = get_pdf_template_info(
-        account_num, company_name, custom_uploaded_bytes
-    )
+    current_pdf_template_bytes = get_pdf_template_bytes(account_num, custom_uploaded_bytes)
 
     if not current_pdf_template_bytes:
         st.error("❌ 无法匹配并加载指定的 PDF 模板，请确认对应 PDF 文件已放置在项目跟目录下。")
@@ -650,26 +537,10 @@ if mode == "📝 Single Mannul Check":
         "account": account_num,
     }
     
-    if is_lakeview_template:
-        routing, bank_account, sheet_company, sheet_bank = project_bank_details(project_site)
-        if not sheet_company or not sheet_bank:
-            st.error("Lakeview 的 Project Sheet 缺少 Company_Name 或 Bank_Name")
-            st.stop()
-        replacements.update({"company_name": sheet_company, "bank_name": sheet_bank})
-
     filled_pdf = fill_pdf_placeholders(current_pdf_template_bytes, replacements)
-    if is_lakeview_template:
-        routing, bank_account, sheet_company, sheet_bank = project_bank_details(project_site)
-        try:
-            filled_pdf = add_lakeview_micr_proof(filled_pdf, routing, bank_account, check_num)
-        except ValueError as exc:
-            st.error(f"Lakeview 银行资料不完整：{exc}")
-            st.stop()
-        st.warning("Lakeview MICR 测试：底部 Routing / Account / Check # 均从 Sheet 和输入动态生成；"
-                   "未配置 E-13B 字体时为 VOID 测试版；配置字体后仍需银行验证打印效果。")
 
     with col2:
-        st.subheader("👁️ Check Preview")
+        st.subheader("👁 Check Preview")
         st.markdown(f"""
         > **Company**: {company_display}  
         > **Bank Account**: `{account_num}`  
@@ -697,16 +568,13 @@ if mode == "📝 Single Mannul Check":
                     "Memo": memo_text,
                 }
             ]
-            if is_lakeview_template:
-                st.session_state["sync_error_msg"] = "Lakeview 测试 PDF 已下载；未写入正式支票历史。"
-            elif save_to_history(record):
+            if save_to_history(record):
                 st.session_state["sync_success_msg"] = f"🎉 Check #{check_num} Successfully saved & transferred to Google Sheets!"
             else:
-                st.session_state["sync_error_msg"] = f"⚠️ Check #{check_num} PDF downloaded, but failed to sync to Google Sheets."
+                st.session_state["sync_error_msg"] = f"⚠ Check #{check_num} PDF downloaded, but failed to sync to Google Sheets."
 
         st.download_button(
-            label=(f"🧪 Download Lakeview TEST PDF (#{check_num})" if is_lakeview_template
-                   else f"🚀 Save to Sheets & Download PDF (#{check_num})"),
+            label=f"🚀 Save to Sheets & Download PDF (#{check_num})",
             data=filled_pdf,
             file_name=f"Check_{check_num}_{payee_name}.pdf",
             mime="application/pdf",
@@ -728,6 +596,8 @@ if mode == "📝 Single Mannul Check":
 elif mode == "👷 Construction Bulk Checks":
     st.title("👷 Construction Bulk Checks")
 
+    if not pdf_template_bytes:
+        st.stop()
 
     pay_date = st.date_input("Date", value=date.today())
 
@@ -743,7 +613,7 @@ elif mode == "👷 Construction Bulk Checks":
         default_num = latest_check_map.get(p_name, 1001)
         with cols[idx % 4]:
             proj_start_nums[p_name] = st.number_input(
-                f"🏗️ {p_name}",
+                f"🏗 {p_name}",
                 min_value=1,
                 value=int(default_num),
                 key=f"start_num_{p_name}"
@@ -939,7 +809,7 @@ elif mode == "👷 Construction Bulk Checks":
     col_title, col_clear = st.columns([8, 2])
     with col_clear:
         if st.session_state.payroll_list:
-            if st.button("🗑️ Clear List", type="secondary", use_container_width=True):
+            if st.button("🗑 Clear List", type="secondary", use_container_width=True):
                 st.session_state.payroll_list = []
                 st.rerun()
 
@@ -951,8 +821,7 @@ elif mode == "👷 Construction Bulk Checks":
             num_rows="dynamic",
             use_container_width=True,
             column_config={
-                "Company": st.column_config.SelectboxColumn("Company", options=sorted(set(["Development Company", "Moo Housing", "Moo Construction"] +
-                                                              df_projects["Company"].dropna().astype(str).tolist())), required=True),
+                "Company": st.column_config.SelectboxColumn("Company", options=["Development Company", "Moo Housing", "Moo Construction"], required=True),
                 "Payee": st.column_config.SelectboxColumn("Payee", options=preset_worker_list, required=True),
                 "Project": st.column_config.SelectboxColumn("Project", options=[""] + preset_project_list),
                 "Check #": st.column_config.NumberColumn("Check #", format="%d"),
@@ -1023,36 +892,13 @@ elif mode == "👷 Construction Bulk Checks":
                     "account": account_num
                 }
     
-                item_tpl, item_tpl_name, item_is_lakeview = get_pdf_template_info(
-                    account_num, company_name, custom_uploaded_bytes
-                )
-                if item_tpl is None:
-                    st.error(f"跳过 {project_name}：找不到模板 {item_tpl_name}")
-                    continue
-                if item_is_lakeview:
-                    routing, bank_account, sheet_company, sheet_bank = project_bank_details(project_name)
-                    if not sheet_company or not sheet_bank:
-                        st.error(f"跳过 {project_name}：缺少 Company_Name 或 Bank_Name")
-                        continue
-                    replacements.update({"company_name": sheet_company, "bank_name": sheet_bank})
-                pdf_res = fill_pdf_placeholders(item_tpl, replacements)
-                if item_is_lakeview:
-                    routing, bank_account, sheet_company, sheet_bank = project_bank_details(project_name)
-                    try:
-                        pdf_res = add_lakeview_micr_proof(pdf_res, routing, bank_account, cur_check)
-                    except ValueError as exc:
-                        st.error(f"跳过 {project_name}：{exc}")
-                        continue
+                pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
                 
                 acc_key = (company_name, account_num)
                 if acc_key not in account_pdf_dict:
                     account_pdf_dict[acc_key] = []
                 account_pdf_dict[acc_key].append((cur_check, project_name, worker_name, pdf_res))
     
-                if item_is_lakeview:
-                    st.warning(f"Lakeview #{cur_check} 已从 Sheet 动态填入底部银行资料；仅生成 VOID 测试版，未加入正式历史。")
-                    continue
-
                 records_log.append({
                     "Check Number": cur_check,
                     "Issue Date": pay_date.strftime("%Y-%m-%d"),
@@ -1065,7 +911,7 @@ elif mode == "👷 Construction Bulk Checks":
                     "Memo": full_memo
                 })
     
-            if account_pdf_dict:
+            if records_log:
                 # ----------------- 新增：按账户合并 PDF -----------------
                 merged_account_pdfs = {}
     
@@ -1090,39 +936,35 @@ elif mode == "👷 Construction Bulk Checks":
                 st.session_state.last_generated_pdfs = merged_account_pdfs
                 # ------------------------------------------------------
     
-                if not records_log or save_to_history(records_log):
+                if save_to_history(records_log):
                     st.session_state.payroll_list = []
     
                     st.balloons()
-                    if records_log:
-                        st.success(f"🎉 {len(records_log)} formal check(s) synced to Google Sheets.")
-                    else:
-                        st.info("🧪 Only Lakeview VOID test PDFs generated; nothing saved to Google Sheets.")
+                    st.success(f"🎉 Successfully generated {len(records_log)} check(s)! Data synced to Google Sheets.")
     
                     st.markdown("### 📊 Current Period Disbursement Summary")
                     df_batch = pd.DataFrame(records_log)
-                    if not df_batch.empty:
-                        col_sum1, col_sum2 = st.columns(2)
+                    col_sum1, col_sum2 = st.columns(2)
     
-                        with col_sum1:
-                            st.markdown("#### 🏢 Summary by Company / Account")
-                            summary_company = df_batch.groupby(["Company", "Account"]).agg(
-                                **{
-                                    "Total Amount": ("Amount", "sum"),
-                                    "Total Number": ("Check Number", "count")
-                                }
-                            ).reset_index()
-                            st.dataframe(summary_company.style.format({"Total Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
+                    with col_sum1:
+                        st.markdown("#### 🏢 Summary by Company / Account")
+                        summary_company = df_batch.groupby(["Company", "Account"]).agg(
+                            **{
+                                "Total Amount": ("Amount", "sum"),
+                                "Total Number": ("Check Number", "count")
+                            }
+                        ).reset_index()
+                        st.dataframe(summary_company.style.format({"Total Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
     
-                        with col_sum2:
-                            st.markdown("#### 🏗️ Summary by Project")
-                            summary_project = df_batch.groupby(["Project", "Company"]).agg(
-                                **{
-                                    "Total Labor Cost": ("Amount", "sum"),
-                                    "Worker Count": ("Check Number", "count")
-                                }
-                            ).reset_index()
-                            st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
+                    with col_sum2:
+                        st.markdown("#### 🏗 Summary by Project")
+                        summary_project = df_batch.groupby(["Project", "Company"]).agg(
+                            **{
+                                "Total Labor Cost": ("Amount", "sum"),
+                                "Worker Count": ("Check Number", "count")
+                            }
+                        ).reset_index()
+                        st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
     
                     st.markdown("### 📥 Download Merged PDF Checks by Account")
                     for (company, acc_num), pdf_data in merged_account_pdfs.items():
