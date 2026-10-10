@@ -3,6 +3,8 @@ from datetime import date
 import io
 import os
 import zipfile
+import re
+from decimal import Decimal
 import fitz
 from num2words import num2words
 import pandas as pd
@@ -17,8 +19,6 @@ st.set_page_config(
 )
 
 # ----------------- 配置文件与路径定义 -----------------
-DEFAULT_TEMPLATE_PATH = "check_run_3738.pdf"
-ACC_8652_TEMPLATE_PATH = "check_run.pdf"
 
 GS_SPREADSHEET_NAME = "Check Issuance History"  # Google 表格的名字
 GS_WORKSHEET_NAME = "Sheet1"                  # 历史记录工作表的名字
@@ -26,7 +26,7 @@ GS_WORKSHEET_NAME = "Sheet1"                  # 历史记录工作表的名字
 # ----------------- 1. 获取 Authorization 客户端 -----------------
 def get_gc_client():
     scope = [
-        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
     creds_dict = dict(st.secrets["GOOGLE_APPLICATION_CREDENTIALS"])
@@ -158,24 +158,255 @@ def load_stage_presets():
 
     return df_combined
     
-def get_pdf_template_bytes(account_num, custom_uploaded_bytes=None):
-    """根据账号匹配对应的 PDF 模板，如果上传了自定义模板则优先使用"""
-    if custom_uploaded_bytes:
-        return custom_uploaded_bytes
-    
-    # 判断账号是否为 ACC-3738
-    if str(account_num).strip().upper() == "ACC-8652":
-        if os.path.exists(ACC_8652_TEMPLATE_PATH):
-            with open(ACC_8652_TEMPLATE_PATH, "rb") as f:
-                return f.read()
-        else:
-            st.warning(f"⚠ 未找到 `{ACC_8652_TEMPLATE_PATH}` 模板文件，已回退使用默认模板。")
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas
+from pathlib import Path
 
-    # 默认模板加载
-    if os.path.exists(DEFAULT_TEMPLATE_PATH):
-        with open(DEFAULT_TEMPLATE_PATH, "rb") as f:
-            return f.read()
-    return None
+DEFAULT_COMPANY_ADDRESS = "3250 Wilshire Blvd, STE1502\nLos Angeles, CA 90010"
+FONT_PATH = Path(__file__).resolve().parent / "micr-e13b.ttf"
+FONT_OK = False
+if FONT_PATH.exists():
+    try:
+        pdfmetrics.registerFont(TTFont("MICR_E13B", str(FONT_PATH)))
+        FONT_OK = True
+    except Exception as e:
+        st.warning(f"MICR font error: {e}")
+
+# Optional secure account registry in Streamlit Secrets, not GitHub.
+# [BANK_ACCOUNTS."ACC-8652"] Bank_Name = "..." etc.
+def bank_registry():
+    registry = {}
+    try:
+        secret = st.secrets.get("BANK_ACCOUNTS", {})
+        for alias, item in dict(secret).items():
+            registry[str(alias)] = {
+                "Bank Name": str(item.get("Bank_Name", item.get("Bank Name", ""))),
+                "Routing Number": str(item.get("Routing_Number", item.get("Routing Number", ""))),
+                "Account Number": str(item.get("Account_Number", item.get("Account Number", ""))),
+            }
+    except Exception:
+        pass
+    return registry
+
+def bank_from_project(alias, project=""):
+    result = bank_registry().get(str(alias), {}).copy()
+    if not df_projects.empty and project in df_projects["Project_Name"].values:
+        p = df_projects[df_projects["Project_Name"] == project].iloc[0]
+        for dest, candidates in {
+            "Bank Name": ["Bank_Name", "Bank Name"],
+            "Routing Number": ["Routing_Number", "Routing Number"],
+            "Account Number": ["Account_Number", "Account Number", "Bank_Account_Number"],
+        }.items():
+            if not result.get(dest):
+                for col in candidates:
+                    if str(p.get(col, "")).strip():
+                        result[dest] = str(p[col]).strip()
+                        break
+    return result
+
+def resolve_bank(alias, project=""):
+    result = bank_from_project(alias, project)
+    overrides = st.session_state.get("bank_overrides", {})
+    result.update({k:v for k,v in overrides.get(str(alias), {}).items() if str(v).strip()})
+    return result
+
+def ensure_bank(alias, project=""):
+    bank = resolve_bank(alias, project)
+    missing = [k for k in ["Bank Name", "Routing Number", "Account Number"] if not bank.get(k)]
+    if missing:
+        raise ValueError(f"Account {alias}: missing {', '.join(missing)}. Configure in sidebar or Streamlit Secrets.")
+    routing = str(bank["Routing Number"]).strip()
+    acct = str(bank["Account Number"]).strip()
+    if not re.fullmatch(r"\d{9}", routing):
+        raise ValueError(f"Account {alias}: Routing Number must be exactly 9 digits")
+    if not re.fullmatch(r"\d+", acct):
+        raise ValueError(f"Account {alias}: Account Number must contain digits only")
+    return bank
+
+def generate_check_pdf(company, account_alias, project, check_no, pay_date, payee, amount, memo):
+    bank = ensure_bank(account_alias, project)
+    info = {
+        "Company": str(company),
+        "Company Address": DEFAULT_COMPANY_ADDRESS,
+        "Bank Name": bank["Bank Name"],
+        "Routing Number": bank["Routing Number"],
+        "Account Number": bank["Account Number"],
+    }
+    payment = {"Check Date": pay_date, "Payee": payee, "Amount": Decimal(str(amount)), "Memo": memo}
+    out = io.BytesIO()
+    c = canvas.Canvas(out, pagesize=letter)
+    c.setTitle("Check layout proof - not negotiable")
+    draw_check(c, payment, info, int(check_no))
+    c.save()
+    return out.getvalue()
+
+def money(value):
+    try:
+        d = Decimal(str(value).replace("$", "").replace(",", "").strip())
+        if not d.is_finite():
+            raise InvalidOperation
+        d = d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if d <= 0:
+            raise ValueError("Amount must be greater than zero")
+        return d
+    except (InvalidOperation, ValueError, TypeError):
+        raise ValueError(f"Invalid positive amount: {value!r}")
+
+
+def amount_words(amount):
+    ones = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"]
+    tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
+    def under_1000(n):
+        parts = []
+        if n >= 100:
+            parts.extend([ones[n // 100], "Hundred"])
+            n %= 100
+        if n >= 20:
+            parts.append(tens[n // 10])
+            if n % 10:
+                parts.append(ones[n % 10])
+        elif n:
+            parts.append(ones[n])
+        return " ".join(parts)
+    n = int(amount)
+    if n == 0:
+        result = "Zero"
+    else:
+        chunks = []
+        for factor, label in [(10**9, "Billion"), (10**6, "Million"), (1000, "Thousand"), (1, "")]:
+            v, n = divmod(n, factor)
+            if v:
+                chunks.append(under_1000(v) + (" " + label if label else ""))
+        result = " ".join(chunks)
+    return f"{result} and {int((amount % 1) * 100):02d}/100 Dollars"
+
+
+def micr_string(check_no, routing, account_no, transit="A", on_us="C"):
+    # Character mapping must be visually checked against the specific TTF glyphs.
+    # This is an unverified proof string, not bank-approved MICR encoding.
+    return f"{on_us}{check_no}{on_us}  {transit}{routing}{transit}  {account_no}{on_us}"
+
+
+def draw_check(c, payment, account, check_no, transit="A", on_us="C"):
+    """FreeCheckPrint-inspired US Letter layout; all printed fields are generated anew.
+
+    Top portion: check; lower portion: record stub. Coordinates use top-left
+    origin to match the supplied reference. This is a watermarked layout proof.
+    """
+    W, H = letter
+    def txt(x, top, text, font="Helvetica", size=8, align="left", max_width=None):
+        text = str(text or "")
+        if max_width is not None:
+            while size > 5.5 and pdfmetrics.stringWidth(text, font, size) > max_width:
+                size -= 0.3
+        c.setFont(font, size)
+        y = H - top
+        if align == "right": c.drawRightString(x, y, text)
+        elif align == "center": c.drawCentredString(x, y, text)
+        else: c.drawString(x, y, text)
+
+    def address_lines(raw):
+        raw = str(raw or "").replace("\r", "")
+        return [v.strip() for v in raw.split("\n") if v.strip()][:3]
+
+    company = str(account["Company"])
+    bank = str(account["Bank Name"])
+    address = address_lines(account.get("Company Address", ""))
+    date_text = payment["Check Date"].strftime("%m/%d/%Y")
+    payee = str(payment["Payee"])
+    amount = payment["Amount"]
+    amount_text = f"{amount:,.2f}"
+    memo = str(payment.get("Memo", "") or "")
+    words = amount_words(amount)
+
+    # Header positions and typography closely follow the uploaded 2001 sample.
+    txt(144, 40, company, "Helvetica-Bold", 9.2, "center", 210)
+    for i, line in enumerate(address):
+        txt(144, 54 + i*10, line, size=7.7, align="center", max_width=240)
+    txt(370, 35, bank, "Helvetica-Bold", 7.4, "center", 188)
+    txt(598, 39, check_no, "Courier", 11, "right")
+    txt(555, 73, date_text, "Helvetica", 10, "right")
+
+    txt(13, 99, "PAY TO THE", "Helvetica", 5.4)
+    txt(13, 106, "ORDER OF", "Helvetica", 5.4)
+    txt(72, 105, payee, "Helvetica", 11, max_width=360)
+    txt(476, 105, "$", "Helvetica-Bold", 11)
+    txt(548, 105, f"****{amount_text}", "Helvetica", 10.5, "right", 90)
+    txt(13, 128, "Pay", "Helvetica-Bold", 7.5)
+    # Clip to available width without truncating numeric amount.
+    txt(36, 128, words + "*"*15, "Helvetica", 9.2, max_width=465)
+    txt(602, 128, "DOLLARS", "Helvetica-Bold", 7, "right")
+    txt(602, 148, "VOID 90 DAYS AFTER ISSUE", "Helvetica-Bold", 6.5, "right")
+    # Removed redundant payee name in the middle of the check.
+    c.setLineWidth(.6)
+    c.line(350, H-204, 600, H-204)
+    txt(492, 216, "AUTHORIZED SIGNATURE", "Helvetica", 5.5, "center")
+    txt(13, 211, "MEMO", "Helvetica-Bold", 9)
+    txt(46, 211, memo, "Helvetica", 10, max_width=290)
+
+    # MICR line: mapping and alignment must be validated by the bank/printer.
+    line = micr_string(check_no, account["Routing Number"], account["Account Number"], transit, on_us)
+    if FONT_OK:
+        size = 12
+        while size > 7 and pdfmetrics.stringWidth(line, "MICR_E13B", size) > 400:
+            size -= .25
+        txt(125, 249, line, "MICR_E13B", size)
+    else:
+        txt(125, 249, "MICR FONT MISSING — TEST ONLY", "Helvetica-Bold", 8)
+
+    # Payment stub below the check, aligned like the reference.
+    txt(7, 298, "CHECK NUMBER:", "Helvetica-Bold", 9)
+    txt(97, 298, check_no, "Helvetica", 9)
+    txt(7, 316, "DATE:", "Helvetica-Bold", 9)
+    txt(97, 316, date_text, "Helvetica", 9)
+    txt(7, 334, "PAYEE:", "Helvetica-Bold", 9)
+    txt(97, 334, payee, "Helvetica", 9, max_width=330)
+    txt(7, 352, "AMOUNT:", "Helvetica-Bold", 9)
+    txt(97, 352, "$"+amount_text, "Helvetica", 9)
+    txt(7, 370, "MEMO:", "Helvetica-Bold", 9)
+    txt(97, 370, memo, "Helvetica", 9, max_width=420)
+
+    txt(306, 402, "Print settings (layout proof):", "Helvetica-Bold", 10, "center")
+    for i, tip in enumerate([
+        "- US Letter (8.5 x 11 in), portrait orientation",
+        "- Print at 100% / Actual size (not Fit to page)",
+        "- Layout proof only: MICR and stock require bank verification",
+        "- No logo or background; verify details before issuance",
+    ]):
+        txt(55, 424 + i*20, tip, "Helvetica", 8.5, max_width=510)
+
+    txt(306, 555, "Keep this copy for your records:", "Helvetica-Bold", 11, "center")
+    # Miniature duplicate; plain black on white, no decorative branding.
+    c.saveState()
+    c.translate(126, H-610)
+    c.scale(.52, .52)
+    # Coordinates in miniature's local space, y goes up.
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(0, 0, company[:42])
+    c.setFont("Helvetica", 7)
+    for i, line in enumerate(address[:2]):
+        c.drawString(0, -12 - i*10, line[:50])
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(290, 0, bank[:37])
+    c.drawRightString(820, 0, str(check_no))
+    c.setFont("Helvetica", 8)
+    c.drawString(0, -50, payee[:45])
+    c.drawRightString(820, -50, "$"+amount_text)
+    c.drawString(0, -75, words[:95])
+    c.drawString(0, -112, "MEMO  " + memo[:65])
+    c.line(560, -112, 820, -112)
+    c.setFont("Helvetica-Bold", 10)
+    c.setFillColorRGB(0, 0, 0)
+    c.drawCentredString(410, -155, "COPY — VOID")
+    c.restoreState()
+
+    # No logo, colored background, or diagonal watermark.
+    # A clear non-negotiable notice remains outside the check area.
+    txt(306, 525, "LAYOUT TEST ONLY — NOT NEGOTIABLE", "Helvetica-Bold", 8, "center")
+    c.showPage()
+
 
 # 加载云端预设数据
 df_projects = load_project_presets()
@@ -265,48 +496,27 @@ def number_to_words_usd(amount):
     except Exception:
         return ""
 
-def fill_pdf_placeholders(pdf_bytes, replacements):
-    """填充 PDF 模板"""
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    for page in doc:
-        for key, val in replacements.items():
-            str_val = str(val) if val is not None else ""
-            patterns = [
-                f"{{{{ {key} }}}}",
-                f"{{{{{key}}}}}",
-                f"{{{{  {key}  }}}}",
-            ]
-            for pattern in patterns:
-                rects = page.search_for(pattern)
-                for rect in rects:
-                    page.add_redact_annot(rect, fill=(1, 1, 1))
-                    page.apply_redactions()
-                    point = fitz.Point(rect.x0, rect.y1 - 2)
-                    page.insert_text(
-                        point, str_val, fontsize=10, color=(0, 0, 0)
-                    )
-    output_stream = io.BytesIO()
-    doc.save(output_stream)
-    doc.close()
-    return output_stream.getvalue()
 
-def merge_pdfs(pdf_bytes_list):
-    """合并 PDF"""
-    merged_doc = fitz.open()
-    for b in pdf_bytes_list:
-        doc = fitz.open(stream=b, filetype="pdf")
-        merged_doc.insert_pdf(doc)
-        doc.close()
-    out_stream = io.BytesIO()
-    merged_doc.save(out_stream)
-    merged_doc.close()
-    return out_stream.getvalue()
-
-# ----------------- 模板检测 -----------------
-pdf_template_bytes = None
-if os.path.exists(DEFAULT_TEMPLATE_PATH):
-    with open(DEFAULT_TEMPLATE_PATH, "rb") as f:
-        pdf_template_bytes = f.read()
+# Real bank routing/account data must be supplied separately from internal aliases.
+st.sidebar.markdown("### Bank account details")
+st.sidebar.caption("ACC-8652 / Chase-1185 are internal aliases, not MICR account numbers.")
+known_aliases = {"ACC-8652", "ACC-3738", "ACC-5027", "Chase-1185"}
+if not df_projects.empty and "Account" in df_projects.columns:
+    known_aliases.update(str(x).strip() for x in df_projects["Account"].dropna() if str(x).strip())
+chosen_alias = st.sidebar.selectbox("Account alias", sorted(known_aliases))
+known = resolve_bank(chosen_alias)
+with st.sidebar.expander("Edit bank information", expanded=False):
+    bank_name_edit = st.text_input("Bank Name", value=known.get("Bank Name", ""), key=f"bankname_{chosen_alias}")
+    routing_edit = st.text_input("Routing Number (9 digits)", value=known.get("Routing Number", ""), key=f"routing_{chosen_alias}")
+    account_edit = st.text_input("Real Account Number", value=known.get("Account Number", ""), key=f"account_{chosen_alias}")
+    if st.button("Apply for this session"):
+        st.session_state.setdefault("bank_overrides", {})[chosen_alias] = {
+            "Bank Name": bank_name_edit.strip(),
+            "Routing Number": routing_edit.strip(),
+            "Account Number": account_edit.strip(),
+        }
+        st.success("Applied for current session")
+st.sidebar.caption("For persistent storage, use BANK_ACCOUNTS in Streamlit Secrets. Do not commit real bank details to GitHub.")
 
 # ----------------- 页面架构 -----------------
 st.sidebar.title("⚙ 系统导航")
@@ -317,10 +527,6 @@ mode = st.sidebar.radio(
         "👷 Construction Bulk Checks",
     ],
 )
-custom_uploaded_bytes = None
-uploaded_tpl = st.sidebar.file_uploader("Upload Override Template (Optional)", type=["pdf"])
-if uploaded_tpl:
-    custom_uploaded_bytes = uploaded_tpl.read()
 
 # ==============================================================================
 # 场景 1：单张手动生成支票
@@ -329,8 +535,6 @@ if mode == "📝 Single Mannul Check":
     st.title("📝 Single Mannul Check")
     st.caption("Please enter the information")
 
-    if not pdf_template_bytes:
-        st.stop()
     col1, col2 = st.columns(2)
 
     with col1:
@@ -466,9 +670,7 @@ if mode == "📝 Single Mannul Check":
 
         company_display = st.text_input("Company Display Name", value=company_name)
 
-        # 提示用户当前调用的模板文件
-        active_tpl_name = "check_run_3738.pdf" if account_num == "ACC-3738" else "check_run.pdf"
-        st.info(f"📄 当前匹配使用的支票模板: **`{active_tpl_name}`**")
+        st.caption("PDF is generated directly; no check template files required.")
 
         st.markdown("---")
 
@@ -520,31 +722,19 @@ if mode == "📝 Single Mannul Check":
 
         amount_words = number_to_words_usd(pay_amount)
 
-    # **根据账户名称获取对应模板数据**
-    current_pdf_template_bytes = get_pdf_template_bytes(account_num, custom_uploaded_bytes)
-
-    if not current_pdf_template_bytes:
-        st.error("❌ 无法匹配并加载指定的 PDF 模板，请确认对应 PDF 文件已放置在项目跟目录下。")
-        st.stop()
-
-    replacements = {
-        "date": pay_date.strftime("%m/%d/%Y"),
-        "name": payee_name,
-        "amount": f"{pay_amount:,.2f}",
-        "amount_words": amount_words,
-        "memo": memo_text,
-        "number": str(check_num),
-        "account": account_num,
-    }
-    
-    filled_pdf = fill_pdf_placeholders(current_pdf_template_bytes, replacements)
+    try:
+        filled_pdf = generate_check_pdf(company_display, account_num, project_site, check_num, pay_date, payee_name, pay_amount, memo_text)
+        pdf_error = None
+    except ValueError as e:
+        filled_pdf = None
+        pdf_error = str(e)
 
     with col2:
         st.subheader("👁 Check Preview")
         st.markdown(f"""
         > **Company**: {company_display}  
         > **Bank Account**: `{account_num}`  
-        > **Template File**: `{active_tpl_name}`  
+        > **PDF**: Directly generated  
         > **Project / Stage**: {project_site} | **`{selected_stage_str}`**  
         > **Check Number**: `#{check_num}`  
         > **Date**: {pay_date.strftime("%Y-%m-%d")}  
@@ -573,9 +763,12 @@ if mode == "📝 Single Mannul Check":
             else:
                 st.session_state["sync_error_msg"] = f"⚠ Check #{check_num} PDF downloaded, but failed to sync to Google Sheets."
 
+        if pdf_error:
+            st.error(pdf_error)
         st.download_button(
             label=f"🚀 Save to Sheets & Download PDF (#{check_num})",
-            data=filled_pdf,
+            data=filled_pdf or b"",
+            disabled=filled_pdf is None,
             file_name=f"Check_{check_num}_{payee_name}.pdf",
             mime="application/pdf",
             type="primary",
@@ -596,8 +789,6 @@ if mode == "📝 Single Mannul Check":
 elif mode == "👷 Construction Bulk Checks":
     st.title("👷 Construction Bulk Checks")
 
-    if not pdf_template_bytes:
-        st.stop()
 
     pay_date = st.date_input("Date", value=date.today())
 
@@ -892,7 +1083,11 @@ elif mode == "👷 Construction Bulk Checks":
                     "account": account_num
                 }
     
-                pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
+                try:
+                    pdf_res = generate_check_pdf(company_name, account_num, project_name, cur_check, pay_date, worker_name, amt, full_memo)
+                except ValueError as e:
+                    st.error(f"Row {idx+1}: {e}")
+                    st.stop()
                 
                 acc_key = (company_name, account_num)
                 if acc_key not in account_pdf_dict:
