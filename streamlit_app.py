@@ -3,6 +3,8 @@ from datetime import date
 import io
 import os
 import zipfile
+import re
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import fitz
 from num2words import num2words
 import pandas as pd
@@ -10,6 +12,7 @@ import streamlit as st
 import gspread
 from PyPDF2 import PdfMerger
 from google.oauth2.service_account import Credentials
+from collections import defaultdict
 
 # ----------------- 页面配置 -----------------
 st.set_page_config(
@@ -302,6 +305,170 @@ def merge_pdfs(pdf_bytes_list):
     merged_doc.close()
     return out_stream.getvalue()
 
+# ----------------- Excel import, stage history, and signature -----------------
+def clean_cell(value):
+    if pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def project_from_token(token):
+    token = clean_cell(token)
+    if not token or df_projects.empty:
+        return None
+    normalized = re.sub(r"[^a-z0-9]", "", token.lower())
+    candidates = []
+    for _, p in df_projects.iterrows():
+        name = clean_cell(p.get("Project_Name", ""))
+        code = clean_cell(p.get("Project_Code", ""))
+        if normalized in (re.sub(r"[^a-z0-9]", "", name.lower()), re.sub(r"[^a-z0-9]", "", code.lower())):
+            candidates.append(name)
+        elif normalized.isdigit() and re.search(r"(?<!\d)" + re.escape(normalized) + r"(?!\d)", name):
+            candidates.append(name)
+    candidates = list(dict.fromkeys(candidates))
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def even_split(total, count):
+    cents = int((Decimal(str(total)) * 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+    q, r = divmod(cents, count)
+    return [(q + (i < r)) / 100 for i in range(count)]
+
+
+def stage_choices():
+    if df_stages.empty:
+        return [""]
+    return [""] + list(dict.fromkeys(clean_cell(v) for v in df_stages['Stage'] if clean_cell(v)))
+
+
+def substage_choices():
+    if df_stages.empty:
+        return [""]
+    return [""] + list(dict.fromkeys(clean_cell(v) for v in df_stages['Sub_Stage'] if clean_cell(v)))
+
+
+def split_saved_stage(value):
+    value = clean_cell(value)
+    m = re.match(r"^(.*?)\s*\((.*?)\)\s*$", value)
+    if m:
+        return m.group(1).strip(), m.group(2).split(',')[0].strip()
+    return value, ""
+
+
+def latest_stage_for(payee, project, history):
+    if history.empty or 'Payee Name' not in history.columns or 'Stage' not in history.columns:
+        return '', '', ''
+    rows = history[history['Payee Name'].astype(str).str.strip().str.casefold() == payee.strip().casefold()].copy()
+    if rows.empty:
+        return '', '', ''
+    rows['_order'] = range(len(rows))
+    rows['_date'] = pd.to_datetime(rows.get('Issue Date', pd.Series('', index=rows.index)), errors='coerce')
+    rows = rows.sort_values(['_date', '_order'], ascending=[False, False], na_position='last')
+    if 'Project' in rows.columns:
+        same = rows[rows['Project'].astype(str).str.strip() == project]
+        rows = pd.concat([same, rows[~rows.index.isin(same.index)]])
+    for _, row in rows.iterrows():
+        stage, sub = split_saved_stage(row.get('Stage', ''))
+        if stage:
+            return stage, sub, clean_cell(row.get('Memo', ''))
+    return '', '', ''
+
+
+def import_excel_rows(upload, history):
+    df = pd.read_excel(upload, dtype={'Projects': str, 'Project': str, 'Project_Code': str}, engine='openpyxl')
+    df.columns = [str(c).strip() for c in df.columns]
+    if 'Payee' not in df.columns or not ({'Total', 'Amount'} & set(df.columns)) or not ({'Projects', 'Project'} & set(df.columns)):
+        raise ValueError('Excel needs Payee, Total (or Amount), and Projects (or Project) columns.')
+    result, errors = [], []
+    for excel_row, (_, row) in enumerate(df.iterrows(), 2):
+        payee = clean_cell(row.get('Payee', ''))
+        raw_total = row.get('Total', row.get('Amount', ''))
+        raw_projects = clean_cell(row.get('Projects', row.get('Project', '')))
+        if not payee and not raw_projects and (pd.isna(raw_total) or clean_cell(raw_total) == ''):
+            continue
+        if not payee or not raw_projects or pd.isna(raw_total) or clean_cell(raw_total) == '':
+            errors.append(f'Excel row {excel_row}: missing payee, amount, or project')
+            continue
+        try:
+            total = Decimal(clean_cell(raw_total).replace('$', '').replace(',', ''))
+            if not total.is_finite() or total <= 0:
+                raise ValueError()
+        except (InvalidOperation, ValueError):
+            errors.append(f'Excel row {excel_row}: invalid amount')
+            continue
+        tokens = [t.strip() for t in re.split(r'[/;,]', raw_projects) if t.strip()]
+        amounts = even_split(total, len(tokens))
+        for token, amount in zip(tokens, amounts):
+            project = project_from_token(token)
+            if not project:
+                errors.append(f'Excel row {excel_row}: project {token!r} not uniquely matched')
+                continue
+            p = df_projects[df_projects['Project_Name'] == project].iloc[0]
+            company, account = clean_cell(p.get('Company', '')), clean_cell(p.get('Account', ''))
+            if not company or not account:
+                errors.append(f'Excel row {excel_row}: missing company/account for {project}')
+                continue
+            stage, sub, historical_memo = latest_stage_for(payee, project, history)
+            explicit_stage = clean_cell(row.get('Stage', ''))
+            explicit_sub = clean_cell(row.get('Sub-Stage', row.get('Sub_Stage', '')))
+            if explicit_stage:
+                stage = explicit_stage
+            if explicit_sub:
+                sub = explicit_sub
+            if not stage and not df_workers.empty and 'Worker_Name' in df_workers:
+                worker = df_workers[df_workers['Worker_Name'].astype(str).str.casefold() == payee.casefold()]
+                if not worker.empty:
+                    stage = clean_cell(worker.iloc[0].get('Stage', ''))
+                    sub = clean_cell(worker.iloc[0].get('Sub_Stage', ''))
+            # Memo is editable detail, not the entire historical memo with project prefix.
+            detail = clean_cell(row.get('Memo', ''))
+            if not detail:
+                if historical_memo.startswith(project + ' - '):
+                    detail = historical_memo[len(project) + 3:]
+                else:
+                    detail = f'{stage} - {sub}' if stage and sub else stage
+            result.append({'Company': company, 'Payee': payee, 'Project': project,
+                           'Account': account, 'Stage': stage, 'Sub-Stage': sub,
+                           'Days': None, 'Rate': None, 'Check #': 0,
+                           'Amount': float(amount), 'Memo': detail})
+    return result, errors
+
+
+def next_account_number(company, account, project, staged, history, project_starts):
+    used = []
+    if not history.empty and {'Company', 'Account', 'Check Number'}.issubset(history.columns):
+        subset = history[(history['Company'].astype(str) == company) & (history['Account'].astype(str) == account)]
+        used.extend(pd.to_numeric(subset['Check Number'], errors='coerce').dropna().astype(int).tolist())
+    used.extend(int(r['Check #']) for r in staged if r.get('Company') == company and r.get('Account') == account and r.get('Check #'))
+    start = int(project_starts.get(project, 1001))
+    return max(max(used) + 1 if used else start, start)
+
+
+def signature_pdf(pdf_bytes, signature_bytes, x=390, y=145, width=160):
+    if not signature_bytes:
+        return pdf_bytes
+    doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+    try:
+        for page in doc:
+            image_doc = fitz.open(stream=signature_bytes, filetype="png" if signature_bytes[:8] == b"\x89PNG\r\n\x1a\n" else "jpeg")
+            height = width * image_doc[0].rect.height / image_doc[0].rect.width
+            image_doc.close()
+            page.insert_image(fitz.Rect(x, y, x + width, y + height), stream=signature_bytes, overlay=True, keep_proportion=True)
+        result = doc.tobytes(garbage=4, deflate=True)
+    finally:
+        doc.close()
+    return result
+
+
+def full_memo_text(project, detail):
+    detail = clean_cell(detail)
+    project = clean_cell(project)
+    if not project or not detail:
+        return project or detail
+    if detail == project or detail.startswith(project + ' - '):
+        return detail
+    return f'{project} - {detail}'
+
 # ----------------- 模板检测 -----------------
 pdf_template_bytes = None
 if os.path.exists(DEFAULT_TEMPLATE_PATH):
@@ -317,6 +484,33 @@ mode = st.sidebar.radio(
         "👷 Construction Bulk Checks",
     ],
 )
+st.sidebar.markdown('### Signature')
+signature_upload = st.sidebar.file_uploader('Upload signature (PNG/JPG)', type=['png', 'jpg', 'jpeg'], key='signature_file')
+signature_raw = signature_upload.getvalue() if signature_upload else None
+if not signature_raw:
+    try:
+        encoded = str(st.secrets.get('CHECK_SIGNATURE_BASE64', '')).strip()
+        if encoded:
+            signature_raw = base64.b64decode(encoded.split(',')[-1])
+    except Exception:
+        st.sidebar.warning('Signature secret is invalid.')
+use_signature = st.sidebar.checkbox('Include signature', value=bool(signature_raw))
+with st.sidebar.expander('Signature placement on PDF template'):
+    signature_x = st.number_input('X from left (pt)', value=390.0, step=5.0)
+    signature_y = st.number_input('Y from top (pt)', value=145.0, step=5.0)
+    signature_width = st.number_input('Signature width (pt)', value=160.0, min_value=20.0, step=5.0)
+    st.caption('Signature is applied only to ACC-3738 (excluding Moo Housing). ACC-8652 and Moo Housing checks remain unsigned. Preview before printing.')
+active_signature = signature_raw if use_signature else None
+
+def signature_for_check(company, account):
+    """Only ACC-3738 checks outside Moo Housing receive a signature."""
+    account_key = str(account or '').strip().upper().replace(' ', '')
+    company_key = str(company or '').strip().casefold()
+    if account_key != 'ACC-3738' or 'moo housing' in company_key:
+        return None
+    return active_signature
+
+
 custom_uploaded_bytes = None
 uploaded_tpl = st.sidebar.file_uploader("Upload Override Template (Optional)", type=["pdf"])
 if uploaded_tpl:
@@ -329,7 +523,8 @@ if mode == "📝 Single Mannul Check":
     st.title("📝 Single Mannul Check")
     st.caption("Please enter the information")
 
-    if not pdf_template_bytes:
+    if not pdf_template_bytes and not custom_uploaded_bytes:
+        st.error("Please add a default PDF template or upload an override template.")
         st.stop()
     col1, col2 = st.columns(2)
 
@@ -537,7 +732,7 @@ if mode == "📝 Single Mannul Check":
         "account": account_num,
     }
     
-    filled_pdf = fill_pdf_placeholders(current_pdf_template_bytes, replacements)
+    filled_pdf = signature_pdf(fill_pdf_placeholders(current_pdf_template_bytes, replacements), signature_for_check(company_display, account_num), signature_x, signature_y, signature_width)
 
     with col2:
         st.subheader("👁 Check Preview")
@@ -596,7 +791,8 @@ if mode == "📝 Single Mannul Check":
 elif mode == "👷 Construction Bulk Checks":
     st.title("👷 Construction Bulk Checks")
 
-    if not pdf_template_bytes:
+    if not pdf_template_bytes and not custom_uploaded_bytes:
+        st.error("Please add a default PDF template or upload an override template.")
         st.stop()
 
     pay_date = st.date_input("Date", value=date.today())
@@ -626,6 +822,31 @@ elif mode == "👷 Construction Bulk Checks":
 
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
+
+    st.markdown('### 📥 Import Excel Payroll')
+    st.caption('Excel columns: Payee, Total, Projects; optional Stage, Sub-Stage, Memo. Projects like 6528/83 are split evenly.')
+    uploaded_excel = st.file_uploader('Upload weekly payroll Excel (.xlsx)', type=['xlsx'], key='bulk_excel_upload')
+    if st.button('Import Excel to Review List', disabled=uploaded_excel is None):
+        try:
+            history = read_file(GS_SPREADSHEET_NAME, GS_WORKSHEET_NAME)
+            imported, import_errors = import_excel_rows(uploaded_excel, history)
+            if import_errors:
+                st.session_state['excel_import_errors'] = import_errors
+                st.error('Import blocked. Fix these Excel rows and upload again: ' + '; '.join(import_errors[:15]))
+            elif not imported:
+                st.warning('No payable records found.')
+            else:
+                staged = list(st.session_state.payroll_list)
+                for item in imported:
+                    item['Check #'] = next_account_number(item['Company'], item['Account'], item['Project'], staged, history, proj_start_nums)
+                    staged.append(item)
+                st.session_state.payroll_list = staged
+                st.session_state.pop('excel_import_errors', None)
+                st.success(f'Imported {len(imported)} checks. Review Stage, Sub-Stage, Memo and accounts below.')
+                st.rerun()
+        except Exception as exc:
+            st.error(f'Excel import failed: {exc}')
+    st.markdown('---')
 
     def update_bulk_stage_and_memo():
         selected_w = st.session_state.get("input_w", "")
@@ -792,7 +1013,8 @@ elif mode == "👷 Construction Bulk Checks":
                 "Payee": add_worker,
                 "Project": final_project_val,
                 "Account": add_account,
-                "Stage": stage_val_str,
+                "Stage": st_code,
+                "Sub-Stage": sub1,
                 "Days": add_days if add_days > 0 else None,
                 "Rate": add_rate if add_rate > 0 else None,
                 "Check #": int(next_chk),
@@ -822,8 +1044,11 @@ elif mode == "👷 Construction Bulk Checks":
             use_container_width=True,
             column_config={
                 "Company": st.column_config.SelectboxColumn("Company", options=["Development Company", "Moo Housing", "Moo Construction"], required=True),
-                "Payee": st.column_config.SelectboxColumn("Payee", options=preset_worker_list, required=True),
+                "Payee": st.column_config.TextColumn("Payee", required=True),
                 "Project": st.column_config.SelectboxColumn("Project", options=[""] + preset_project_list),
+                "Stage": st.column_config.SelectboxColumn("Stage", options=list(dict.fromkeys(stage_choices() + df_payroll_input.get("Stage", pd.Series(dtype=str)).dropna().astype(str).tolist()))),
+                "Sub-Stage": st.column_config.SelectboxColumn("Sub-Stage", options=list(dict.fromkeys(substage_choices() + df_payroll_input.get("Sub-Stage", pd.Series(dtype=str)).dropna().astype(str).tolist()))),
+                "Memo": st.column_config.TextColumn("Memo Detail"),
                 "Check #": st.column_config.NumberColumn("Check #", format="%d"),
                 "Amount": st.column_config.NumberColumn("Amount", format="$%.2f"),
                 "Days": st.column_config.NumberColumn("Days", format="%.1f"),
@@ -837,141 +1062,82 @@ elif mode == "👷 Construction Bulk Checks":
 
     st.markdown("---")
 
-    # ----------------- 4. 批量生成与导出 -----------------
+    # ----------------- 4. Batch generate (one persistent PDF) -----------------
     if not df_payroll_input.empty:
-        if st.button(f"🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks", type="primary", use_container_width=True):
-            account_pdf_dict = {}
-            records_log = []
-    
-            proj_map = df_projects.set_index("Project_Name").to_dict(orient="index") if not df_projects.empty else {}
-    
+        dup = df_payroll_input.duplicated(subset=['Company', 'Account', 'Check #'], keep=False)
+        if dup.any():
+            st.error('Duplicate check numbers within the same company/account. Please correct before generating.')
+        if st.button(f'🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks',
+                     type='primary', use_container_width=True, disabled=bool(dup.any())):
+            pdf_items, records_log, issues = [], [], []
             for idx, row in df_payroll_input.iterrows():
-                worker_name = str(row.get("Payee", "")).strip()
-                project_name = str(row.get("Project", "")).strip()
-                stage_name = str(row.get("Stage", "")).strip()
-                
+                payee, project = clean_cell(row.get('Payee', '')), clean_cell(row.get('Project', ''))
+                company, account = clean_cell(row.get('Company', '')), clean_cell(row.get('Account', ''))
+                stage, sub = clean_cell(row.get('Stage', '')), clean_cell(row.get('Sub-Stage', ''))
                 try:
-                    cur_check = int(row.get("Check #", 0))
-                    amt = float(row.get("Amount", 0.0))
-                except (ValueError, TypeError):
-                    cur_check = 0
-                    amt = 0.0
-    
-                detail_memo = str(row.get("Memo", "")).strip()
-    
-                if amt <= 0 or not worker_name or cur_check <= 0:
+                    number = int(row.get('Check #', 0))
+                    amount = Decimal(str(row.get('Amount', '')))
+                    if number < 1 or not amount.is_finite() or amount <= 0:
+                        raise ValueError()
+                except (ValueError, InvalidOperation, TypeError):
+                    issues.append(f'Row {idx+1}: invalid check number or amount')
                     continue
-    
-                p_info = proj_map.get(project_name, {"Account": "ACC-8652", "Company": "Development Company"})
-                
-                company_name = str(row.get("Company", "")).strip()
-                if not company_name or company_name == "Development Company":
-                    company_name = str(p_info.get("Company", "Development Company")).strip()
-                
-                if company_name == "Moo Construction":
-                    account_num = "Chase-1185"
-                elif company_name == "Moo Housing":
-                    account_num = str(row.get("Account", "")).strip() or "ACC-8652"
-                else:
-                    account_num = str(row.get("Account", "")).strip() or str(p_info.get("Account", "ACC-8652")).strip()
-    
-                if project_name and detail_memo:
-                    full_memo = f"{project_name} - {detail_memo}"
-                elif project_name:
-                    full_memo = project_name
-                else:
-                    full_memo = detail_memo
-    
+                if not payee or not company or not account:
+                    issues.append(f'Row {idx+1}: missing payee/company/account')
+                    continue
+                memo = full_memo_text(project, row.get('Memo', ''))
+                stage_saved = f'{stage} ({sub})' if stage and sub else stage
                 replacements = {
-                    "date": pay_date.strftime("%m/%d/%Y"),
-                    "name": worker_name,
-                    "amount": f"{amt:,.2f}",
-                    "amount_words": number_to_words_usd(amt),
-                    "memo": full_memo,
-                    "number": str(cur_check),
-                    "account": account_num
+                    'date': pay_date.strftime('%m/%d/%Y'), 'name': payee,
+                    'amount': f'{amount:,.2f}', 'amount_words': number_to_words_usd(float(amount)),
+                    'memo': memo, 'number': str(number), 'account': account
                 }
-    
-                pdf_res = fill_pdf_placeholders(pdf_template_bytes, replacements)
-                
-                acc_key = (company_name, account_num)
-                if acc_key not in account_pdf_dict:
-                    account_pdf_dict[acc_key] = []
-                account_pdf_dict[acc_key].append((cur_check, project_name, worker_name, pdf_res))
-    
+                template = get_pdf_template_bytes(account, custom_uploaded_bytes)
+                if not template:
+                    issues.append(f'Row {idx+1}: missing PDF template for account {account}')
+                    continue
+                try:
+                    pdf = fill_pdf_placeholders(template, replacements)
+                    pdf = signature_pdf(pdf, signature_for_check(company, account), signature_x, signature_y, signature_width)
+                except Exception as exc:
+                    issues.append(f'Row {idx+1}: PDF error: {exc}')
+                    continue
+                pdf_items.append((company, account, number, pdf))
                 records_log.append({
-                    "Check Number": cur_check,
-                    "Issue Date": pay_date.strftime("%Y-%m-%d"),
-                    "Company": company_name,
-                    "Account": account_num,
-                    "Project": project_name,
-                    "Stage": stage_name,
-                    "Payee Name": worker_name,
-                    "Amount": amt,
-                    "Memo": full_memo
+                    'Check Number': number, 'Issue Date': pay_date.strftime('%Y-%m-%d'),
+                    'Company': company, 'Account': account, 'Project': project,
+                    'Stage': stage_saved, 'Payee Name': payee,
+                    'Amount': float(amount), 'Memo': memo
                 })
-    
-            if records_log:
-                # ----------------- 新增：按账户合并 PDF -----------------
-                merged_account_pdfs = {}
-    
-                for (company, acc_num), items in account_pdf_dict.items():
-                    # 按照 Check Number (cur_check) 升序排序，保证连号输出
-                    sorted_items = sorted(items, key=lambda x: x[0])
-                    
-                    merger = PdfMerger()
-                    for item in sorted_items:
-                        pdf_bytes = item[3]  # 单张支票的 PDF Bytes
-                        merger.append(io.BytesIO(pdf_bytes))
-                    
-                    merged_output = io.BytesIO()
-                    merger.write(merged_output)
-                    merger.close()
-                    merged_output.seek(0)
-                    
-                    # 存储合并后的 PDF 二进制数据
-                    merged_account_pdfs[(company, acc_num)] = merged_output.getvalue()
-    
-                # 将合并后的 PDF 结果存入 session_state
-                st.session_state.last_generated_pdfs = merged_account_pdfs
-                # ------------------------------------------------------
-    
-                if save_to_history(records_log):
-                    st.session_state.payroll_list = []
-    
-                    st.balloons()
-                    st.success(f"🎉 Successfully generated {len(records_log)} check(s)! Data synced to Google Sheets.")
-    
-                    st.markdown("### 📊 Current Period Disbursement Summary")
-                    df_batch = pd.DataFrame(records_log)
-                    col_sum1, col_sum2 = st.columns(2)
-    
-                    with col_sum1:
-                        st.markdown("#### 🏢 Summary by Company / Account")
-                        summary_company = df_batch.groupby(["Company", "Account"]).agg(
-                            **{
-                                "Total Amount": ("Amount", "sum"),
-                                "Total Number": ("Check Number", "count")
-                            }
-                        ).reset_index()
-                        st.dataframe(summary_company.style.format({"Total Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
-    
-                    with col_sum2:
-                        st.markdown("#### 🏗 Summary by Project")
-                        summary_project = df_batch.groupby(["Project", "Company"]).agg(
-                            **{
-                                "Total Labor Cost": ("Amount", "sum"),
-                                "Worker Count": ("Check Number", "count")
-                            }
-                        ).reset_index()
-                        st.dataframe(summary_project.style.format({"Total Labor Cost": "${:,.2f}"}), use_container_width=True, hide_index=True)
-    
-                    st.markdown("### 📥 Download Merged PDF Checks by Account")
-                    for (company, acc_num), pdf_data in merged_account_pdfs.items():
-                        file_name = f"Checks_{company}_{acc_num}_{pay_date.strftime('%Y%m%d')}.pdf"
-                        st.download_button(
-                            label=f"📄 Download Combined PDF for {company} ({acc_num})",
-                            data=pdf_data,
-                            file_name=file_name,
-                            mime="application/pdf"
-                        )
+            if issues:
+                st.error('No checks saved or issued. Fix: ' + '; '.join(issues[:12]))
+            elif pdf_items:
+                pdf_items.sort(key=lambda v: (v[0], v[1], v[2]))
+                combined = merge_pdfs([v[3] for v in pdf_items])
+                st.session_state['bulk_last_pdf'] = combined
+                st.session_state['bulk_last_filename'] = f'All_Company_Checks_{pay_date:%Y%m%d}.pdf'
+                st.session_state['bulk_last_records'] = records_log
+                st.session_state['bulk_history_saved'] = False
+                st.success(f'Generated {len(pdf_items)} checks in ONE PDF. Review/download below.')
+
+    if st.session_state.get('bulk_last_pdf'):
+        st.markdown('### 📥 Download all checks (one PDF)')
+        st.download_button('📄 Download ALL checks',
+                           data=st.session_state['bulk_last_pdf'],
+                           file_name=st.session_state['bulk_last_filename'],
+                           mime='application/pdf', use_container_width=True,
+                           on_click='ignore')
+        records = st.session_state.get('bulk_last_records', [])
+        if records:
+            summary = pd.DataFrame(records).groupby(['Company', 'Account'], as_index=False).agg(
+                Checks=('Check Number', 'count'), Total=('Amount', 'sum'))
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+        if st.session_state.get('bulk_history_saved'):
+            st.success('This batch has already been saved to Google Sheets.')
+        elif st.button('💾 Save this generated batch to Google Sheets', type='primary'):
+            if save_to_history(records):
+                st.session_state['bulk_history_saved'] = True
+                st.session_state.payroll_list = []
+                st.success('Saved to Google Sheets. Download remains available above.')
+            else:
+                st.error('Sheets save failed. Check history before retrying to avoid duplicates.')
