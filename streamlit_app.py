@@ -14,12 +14,6 @@ from PyPDF2 import PdfMerger
 from google.oauth2.service_account import Credentials
 from collections import defaultdict
 
-import sys
-import importlib.util
-import streamlit as st
-
-st.write("Python:", sys.executable)
-st.write("Openpyxl installed:", importlib.util.find_spec("openpyxl") is not None)
 # ----------------- 页面配置 -----------------
 st.set_page_config(
     page_title="Check Generator System", page_icon="🧾", layout="wide"
@@ -317,7 +311,7 @@ def merge_pdfs(pdf_bytes_list):
     merged_doc.close()
     return out_stream.getvalue()
 
-# ----------------- Excel import, stage history, and signature -----------------
+# ----------------- CSV import, stage history, and signature -----------------
 def clean_cell(value):
     if pd.isna(value):
         return ""
@@ -386,39 +380,48 @@ def latest_stage_for(payee, project, history):
     return '', '', ''
 
 
-def import_excel_rows(upload, history):
-    df = pd.read_excel(upload, dtype={'Projects': str, 'Project': str, 'Project_Code': str}, engine='openpyxl')
+def import_csv_rows(upload, history):
+    # utf-8-sig handles CSVs saved by Excel with BOM; dtype=str preserves project codes.
+    raw = upload.getvalue()
+    try:
+        csv_text = raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        try:
+            csv_text = raw.decode('gb18030')
+        except UnicodeDecodeError as exc:
+            raise ValueError('Please save CSV as UTF-8 (CSV UTF-8 in Excel).') from exc
+    df = pd.read_csv(io.StringIO(csv_text), dtype=str, keep_default_na=False)
     df.columns = [str(c).strip() for c in df.columns]
     if 'Payee' not in df.columns or not ({'Total', 'Amount'} & set(df.columns)) or not ({'Projects', 'Project'} & set(df.columns)):
-        raise ValueError('Excel needs Payee, Total (or Amount), and Projects (or Project) columns.')
+        raise ValueError('CSV needs Payee, Total (or Amount), and Projects (or Project) columns.')
     result, errors = [], []
-    for excel_row, (_, row) in enumerate(df.iterrows(), 2):
+    for csv_row, (_, row) in enumerate(df.iterrows(), 2):
         payee = clean_cell(row.get('Payee', ''))
         raw_total = row.get('Total', row.get('Amount', ''))
         raw_projects = clean_cell(row.get('Projects', row.get('Project', '')))
         if not payee and not raw_projects and (pd.isna(raw_total) or clean_cell(raw_total) == ''):
             continue
         if not payee or not raw_projects or pd.isna(raw_total) or clean_cell(raw_total) == '':
-            errors.append(f'Excel row {excel_row}: missing payee, amount, or project')
+            errors.append(f'CSV row {csv_row}: missing payee, amount, or project')
             continue
         try:
             total = Decimal(clean_cell(raw_total).replace('$', '').replace(',', ''))
             if not total.is_finite() or total <= 0:
                 raise ValueError()
         except (InvalidOperation, ValueError):
-            errors.append(f'Excel row {excel_row}: invalid amount')
+            errors.append(f'CSV row {csv_row}: invalid amount')
             continue
         tokens = [t.strip() for t in re.split(r'[/;,]', raw_projects) if t.strip()]
         amounts = even_split(total, len(tokens))
         for token, amount in zip(tokens, amounts):
             project = project_from_token(token)
             if not project:
-                errors.append(f'Excel row {excel_row}: project {token!r} not uniquely matched')
+                errors.append(f'CSV row {csv_row}: project {token!r} not uniquely matched')
                 continue
             p = df_projects[df_projects['Project_Name'] == project].iloc[0]
             company, account = clean_cell(p.get('Company', '')), clean_cell(p.get('Account', ''))
             if not company or not account:
-                errors.append(f'Excel row {excel_row}: missing company/account for {project}')
+                errors.append(f'CSV row {csv_row}: missing company/account for {project}')
                 continue
             stage, sub, historical_memo = latest_stage_for(payee, project, history)
             explicit_stage = clean_cell(row.get('Stage', ''))
@@ -883,15 +886,15 @@ elif mode == "👷 Construction Bulk Checks":
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
 
-    st.markdown('### 📥 Import Excel Payroll')
-    st.caption('Excel columns: Payee, Total, Projects; optional Stage, Sub-Stage, Memo. Projects like 6528/83 are split evenly.')
-    uploaded_excel = st.file_uploader('Upload weekly payroll Excel (.xlsx)', type=['xlsx'], key='bulk_excel_upload')
-    if st.button('Import Excel to Review List', disabled=uploaded_excel is None):
+    st.markdown('### 📥 Import CSV Payroll')
+    st.caption('CSV columns: Payee, Total, Projects; optional Stage, Sub-Stage, Memo. Projects like 6528/83 are split evenly. In Excel use Save As → CSV UTF-8 (Comma delimited).')
+    uploaded_csv = st.file_uploader('Upload weekly payroll CSV (.csv)', type=['csv'], key='bulk_csv_upload')
+    if st.button('Import CSV to Review List', disabled=uploaded_csv is None):
         try:
             history = read_file(GS_SPREADSHEET_NAME, GS_WORKSHEET_NAME)
-            imported, import_errors = import_excel_rows(uploaded_excel, history)
+            imported, import_errors = import_csv_rows(uploaded_csv, history)
             if import_errors:
-                st.session_state['excel_import_errors'] = import_errors
+                st.session_state['csv_import_errors'] = import_errors
                 st.error('Import blocked. Fix these Excel rows and upload again: ' + '; '.join(import_errors[:15]))
             elif not imported:
                 st.warning('No payable records found.')
@@ -901,11 +904,11 @@ elif mode == "👷 Construction Bulk Checks":
                     item['Check #'] = next_account_number(item['Company'], item['Account'], item['Project'], staged, history, proj_start_nums)
                     staged.append(item)
                 st.session_state.payroll_list = staged
-                st.session_state.pop('excel_import_errors', None)
+                st.session_state.pop('csv_import_errors', None)
                 st.success(f'Imported {len(imported)} checks. Review Stage, Sub-Stage, Memo and accounts below.')
                 st.rerun()
         except Exception as exc:
-            st.error(f'Excel import failed: {exc}')
+            st.error(f'CSV import failed: {exc}')
     st.markdown('---')
 
     def update_bulk_stage_and_memo():
