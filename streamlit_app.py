@@ -1207,6 +1207,56 @@ elif mode == "👷 Construction Bulk Checks":
             key="payroll_data_editor"
         )
         df_payroll_input = edited_df
+
+        # Explicit per-check dropdowns: easy to use after Excel import, including
+        # ambiguous project codes. These are in addition to table dropdown cells.
+        with st.expander("🎛️ Select Project / Stage / Sub-Stage for each imported check", expanded=True):
+            st.caption("Each row has its own dropdowns. Choose Project, Stage and Sub-Stage, edit Memo, then click Apply. Unmatched project codes are allowed until review is complete.")
+            with st.form("per_check_dropdown_form"):
+                dropdown_rows = []
+                all_projects = [""] + list(dict.fromkeys(preset_project_list))
+                all_stages = list(dict.fromkeys(stage_choices() + edited_df.get("Stage", pd.Series(dtype=str)).fillna("").astype(str).tolist()))
+                all_subs = list(dict.fromkeys(substage_choices() + edited_df.get("Sub-Stage", pd.Series(dtype=str)).fillna("").astype(str).tolist()))
+                for idx, (_, r) in enumerate(edited_df.iterrows()):
+                    st.markdown(f"**{idx + 1}. {clean_cell(r.get('Payee', ''))} — ${float(r.get('Amount', 0) or 0):,.2f}** (Excel Project: {clean_cell(r.get('Project Code', ''))})")
+                    c1, c2, c3 = st.columns([2, 1.4, 1.5])
+                    current_project = clean_cell(r.get('Project', ''))
+                    current_stage = clean_cell(r.get('Stage', ''))
+                    current_sub = clean_cell(r.get('Sub-Stage', ''))
+                    with c1:
+                        project_choice = st.selectbox("Project", all_projects, index=all_projects.index(current_project) if current_project in all_projects else 0, key=f"check_project_{idx}")
+                    with c2:
+                        stage_choice = st.selectbox("Stage", all_stages, index=all_stages.index(current_stage) if current_stage in all_stages else 0, key=f"check_stage_{idx}")
+                    with c3:
+                        sub_choice = st.selectbox("Sub-Stage", all_subs, index=all_subs.index(current_sub) if current_sub in all_subs else 0, key=f"check_sub_{idx}")
+                    memo_choice = st.text_input("Memo Detail (editable)", value=clean_cell(r.get('Memo', '')), key=f"check_memo_{idx}")
+                    dropdown_rows.append((project_choice, stage_choice, sub_choice, memo_choice))
+                apply_dropdowns = st.form_submit_button("✅ Apply selected Project / Stage / Memo", type="primary", use_container_width=True)
+            if apply_dropdowns:
+                history = read_file(GS_SPREADSHEET_NAME, GS_WORKSHEET_NAME)
+                updated = []
+                for idx, (_, r) in enumerate(edited_df.iterrows()):
+                    item = r.to_dict()
+                    new_project, new_stage, new_sub, new_memo = dropdown_rows[idx]
+                    old_project = clean_cell(item.get('Project', ''))
+                    item['Project'] = new_project
+                    item['Stage'] = new_stage
+                    item['Sub-Stage'] = new_sub
+                    item['Memo'] = new_memo
+                    if new_project in preset_project_list:
+                        info = df_projects[df_projects['Project_Name'] == new_project].iloc[0]
+                        item['Company'] = clean_cell(info.get('Company', ''))
+                        item['Account'] = clean_cell(info.get('Account', ''))
+                        if new_project != old_project:
+                            item['Check #'] = next_account_number(item['Company'], item['Account'], new_project, updated, history, proj_start_nums)
+                    else:
+                        item['Company'], item['Account'], item['Check #'] = '', '', 0
+                    updated.append(item)
+                st.session_state.payroll_list = updated
+                # Reset editor widget so it reads the newly committed dropdown values.
+                st.session_state.pop('payroll_data_editor', None)
+                st.rerun()
+
         # Resolve the selected project into its authoritative payer/account, and
         # prefill historical Stage/Memo without overwriting user edits.
         if st.button('↻ Apply Project selections & refresh defaults', help='After selecting unresolved Projects, click to match Company/Account and last used Stage.'):
