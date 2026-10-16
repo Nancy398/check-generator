@@ -523,7 +523,7 @@ def import_csv_rows(upload, history, project_overrides=None):
             # Memo is editable detail, not the entire historical memo with project prefix.
             detail = clean_cell(row.get('Memo', ''))
             if not detail:
-                if historical_memo.startswith(project + ' - '):
+                if project and historical_memo.startswith(project + ' - '):
                     detail = historical_memo[len(project) + 3:]
                 else:
                     detail = f'{stage} - {sub}' if stage and sub else stage
@@ -544,7 +544,7 @@ def next_account_number(company, account, project, staged, history, project_star
     return max(max(used) + 1 if used else start, start)
 
 
-def signature_pdf(pdf_bytes, signature_bytes, x=390, y=145, width=160):
+def signature_pdf(pdf_bytes, signature_bytes, x=420, y=155, width=160):
     if not signature_bytes:
         return pdf_bytes
     doc = fitz.open(stream=pdf_bytes, filetype='pdf')
