@@ -3,6 +3,8 @@ from datetime import date
 import io
 import os
 import zipfile
+import csv
+from xml.etree import ElementTree as ET
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import fitz
@@ -345,6 +347,63 @@ def project_from_token(token, overrides=None):
         return overrides[token]
     candidates = project_candidates(token)
     return candidates[0] if len(candidates) == 1 else None
+
+
+def xlsx_to_csv_bytes(raw):
+    """Read first Excel worksheet with Python stdlib; no openpyxl required.
+
+    Supports standard Excel .xlsx shared/inline strings and numeric cells.
+    This payroll file uses plain values, not formulas or macros.
+    """
+    ns = {'m': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    with zipfile.ZipFile(io.BytesIO(raw)) as book:
+        entries = set(book.namelist())
+        if 'xl/worksheets/sheet1.xml' not in entries:
+            raise ValueError('Cannot find the first worksheet in this Excel file.')
+        shared = []
+        if 'xl/sharedStrings.xml' in entries:
+            shared_root = ET.fromstring(book.read('xl/sharedStrings.xml'))
+            for si in shared_root.findall('m:si', ns):
+                shared.append(''.join(node.text or '' for node in si.iter('{%s}t' % ns['m'])))
+        sheet = ET.fromstring(book.read('xl/worksheets/sheet1.xml'))
+        lines = []
+        for row in sheet.findall('.//m:sheetData/m:row', ns):
+            values = {}
+            for cell in row.findall('m:c', ns):
+                ref = cell.get('r', '')
+                letters = re.match(r'[A-Z]+', ref)
+                if not letters:
+                    continue
+                index = 0
+                for letter in letters.group():
+                    index = index * 26 + ord(letter) - ord('A') + 1
+                index -= 1
+                kind = cell.get('t', '')
+                value_node = cell.find('m:v', ns)
+                if kind == 'inlineStr':
+                    inline = cell.find('m:is', ns)
+                    value = ''.join(node.text or '' for node in inline.iter('{%s}t' % ns['m'])) if inline is not None else ''
+                else:
+                    value = value_node.text if value_node is not None and value_node.text is not None else ''
+                    if kind == 's' and value:
+                        value = shared[int(value)]
+                values[index] = value
+            if values:
+                lines.append([values.get(i, '') for i in range(max(values) + 1)])
+    if not lines:
+        raise ValueError('The first Excel worksheet is empty.')
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerows(lines)
+    return output.getvalue().encode('utf-8-sig')
+
+
+def payroll_upload_as_csv(upload):
+    """Normalize .xlsx and .csv to the existing CSV payroll importer."""
+    raw = upload.getvalue()
+    if upload.name.lower().endswith('.xlsx'):
+        raw = xlsx_to_csv_bytes(raw)
+    return io.BytesIO(raw)
 
 
 def csv_project_tokens(upload):
@@ -912,14 +971,14 @@ elif mode == "👷 Construction Bulk Checks":
     if "payroll_list" not in st.session_state:
         st.session_state.payroll_list = []
 
-    st.markdown('### 📥 Import CSV Payroll')
-    st.caption('CSV columns: Payee, Total, Projects; optional Stage, Sub-Stage, Memo. Projects like 6528/83 are split evenly. In Excel use Save As → CSV UTF-8 (Comma delimited).')
-    uploaded_csv = st.file_uploader('Upload weekly payroll CSV (.csv)', type=['csv'], key='bulk_csv_upload')
+    st.markdown('### 📥 Import Weekly Payroll (Excel or CSV)')
+    st.caption('Upload your original .xlsx directly — no openpyxl needed. Columns: Payee, Total, Projects, Notes; optional Stage, Sub-Stage, Memo. Each Excel row is one amount; only slash-separated multiple projects within a single row are split.')
+    uploaded_csv = st.file_uploader('Upload weekly payroll Excel (.xlsx) or CSV (.csv)', type=['xlsx', 'csv'], key='bulk_csv_upload')
     # Import all rows immediately; ambiguous codes are resolved inside Review & Edit.
-    if st.button('Import CSV to Review List', disabled=uploaded_csv is None):
+    if st.button('Import Excel / CSV to Review List', disabled=uploaded_csv is None):
         try:
             history = read_file(GS_SPREADSHEET_NAME, GS_WORKSHEET_NAME)
-            imported, import_errors = import_csv_rows(uploaded_csv, history)
+            imported, import_errors = import_csv_rows(payroll_upload_as_csv(uploaded_csv), history)
             if import_errors:
                 st.session_state['csv_import_errors'] = import_errors
                 st.error('Import blocked. Check these CSV rows: ' + '; '.join(import_errors[:15]))
@@ -935,7 +994,7 @@ elif mode == "👷 Construction Bulk Checks":
                 st.success(f'Imported {len(imported)} draft checks. Select any unresolved Projects in Review & Edit, then review Stage, Sub-Stage, Memo and account.')
                 st.rerun()
         except Exception as exc:
-            st.error(f'CSV import failed: {exc}')
+            st.error(f'Payroll import failed: {exc}')
     st.markdown('---')
 
     def update_bulk_stage_and_memo():
@@ -1136,7 +1195,7 @@ elif mode == "👷 Construction Bulk Checks":
                 "Company": st.column_config.SelectboxColumn("Company", options=["Development Company", "Moo Housing", "Moo Construction"], required=True),
                 "Payee": st.column_config.TextColumn("Payee", required=True),
                 "Project": st.column_config.SelectboxColumn("Project", options=[""] + preset_project_list),
-                "Project Code": st.column_config.TextColumn("CSV Project Code", disabled=True),
+                "Project Code": st.column_config.TextColumn("Original Project Code", disabled=True),
                 "Stage": st.column_config.SelectboxColumn("Stage", options=list(dict.fromkeys(stage_choices() + df_payroll_input.get("Stage", pd.Series(dtype=str)).dropna().astype(str).tolist()))),
                 "Sub-Stage": st.column_config.SelectboxColumn("Sub-Stage", options=list(dict.fromkeys(substage_choices() + df_payroll_input.get("Sub-Stage", pd.Series(dtype=str)).dropna().astype(str).tolist()))),
                 "Memo": st.column_config.TextColumn("Memo Detail"),
