@@ -14,6 +14,12 @@ from PyPDF2 import PdfMerger
 from google.oauth2.service_account import Credentials
 from collections import defaultdict
 
+import sys
+import importlib.util
+import streamlit as st
+
+st.write("Python:", sys.executable)
+st.write("Openpyxl installed:", importlib.util.find_spec("openpyxl") is not None)
 # ----------------- 页面配置 -----------------
 st.set_page_config(
     page_title="Check Generator System", page_icon="🧾", layout="wide"
