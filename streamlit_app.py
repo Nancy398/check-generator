@@ -485,22 +485,60 @@ mode = st.sidebar.radio(
     ],
 )
 st.sidebar.markdown('### Signature')
-signature_upload = st.sidebar.file_uploader('Upload signature (PNG/JPG)', type=['png', 'jpg', 'jpeg'], key='signature_file')
-signature_raw = signature_upload.getvalue() if signature_upload else None
-if not signature_raw:
+st.sidebar.caption('ACC-3738 only. Signature is loaded automatically from Streamlit Secrets; upload is optional.')
+signature_upload = st.sidebar.file_uploader('Override signature (optional PNG/JPG)', type=['png', 'jpg', 'jpeg'], key='signature_file')
+signature_raw = None
+signature_source = None
+signature_error = None
+
+# The optional upload overrides Secrets; otherwise use the existing CHECK_SIGNATURE_BASE64.
+if signature_upload is not None:
+    signature_raw = signature_upload.getvalue()
+    signature_source = 'Uploaded image'
+else:
     try:
-        encoded = str(st.secrets.get('CHECK_SIGNATURE_BASE64', '')).strip()
-        if encoded:
-            signature_raw = base64.b64decode(encoded.split(',')[-1])
+        encoded = st.secrets.get('CHECK_SIGNATURE_BASE64', '')
+        if isinstance(encoded, str) and encoded.strip():
+            encoded = encoded.strip().strip('\"').strip("'")
+            if encoded.lower().startswith('data:image/') and ',' in encoded:
+                encoded = encoded.split(',', 1)[1]
+            signature_raw = base64.b64decode(''.join(encoded.split()), validate=True)
+            signature_source = 'Streamlit Secrets (CHECK_SIGNATURE_BASE64)'
+    except Exception as exc:
+        signature_error = f'Could not decode CHECK_SIGNATURE_BASE64: {type(exc).__name__}'
+
+# File fallback is only used if no upload and no usable Secret exists.
+if not signature_raw:
+    default_signature_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Wenhao_Mu_Signature.png')
+    if os.path.isfile(default_signature_path):
+        signature_raw = open(default_signature_path, 'rb').read()
+        signature_source = 'Bundled signature PNG'
+
+# Verify image bytes rather than showing a misleading loaded message for bad Base64.
+if signature_raw:
+    try:
+        image_check = fitz.open(stream=signature_raw, filetype='png' if signature_raw.startswith(b'\x89PNG\r\n\x1a\n') else 'jpeg')
+        if image_check.page_count < 1:
+            raise ValueError('Empty image')
+        image_check.close()
     except Exception:
-        st.sidebar.warning('Signature secret is invalid.')
-use_signature = st.sidebar.checkbox('Include signature', value=bool(signature_raw))
+        signature_raw = None
+        signature_error = 'Signature data is not a valid PNG or JPEG image.'
+
+if signature_raw:
+    st.sidebar.success(f'✔ Signature loaded from {signature_source}')
+else:
+    st.sidebar.error(signature_error or 'No signature found. Set CHECK_SIGNATURE_BASE64 in Streamlit Secrets or upload a PNG/JPG.')
+
+use_signature = st.sidebar.checkbox('Include signature for ACC-3738', value=bool(signature_raw), disabled=not bool(signature_raw))
 with st.sidebar.expander('Signature placement on PDF template'):
     signature_x = st.number_input('X from left (pt)', value=390.0, step=5.0)
     signature_y = st.number_input('Y from top (pt)', value=145.0, step=5.0)
     signature_width = st.number_input('Signature width (pt)', value=160.0, min_value=20.0, step=5.0)
-    st.caption('Signature is applied only to ACC-3738 (excluding Moo Housing). ACC-8652 and Moo Housing checks remain unsigned. Preview before printing.')
+    st.caption('Only ACC-3738 outside Moo Housing is signed. Verify placement on a test PDF before printing.')
 active_signature = signature_raw if use_signature else None
+if signature_raw and not use_signature:
+    st.sidebar.info('Signature loaded, but the Include signature checkbox is off.')
 
 def signature_for_check(company, account):
     """Only ACC-3738 checks outside Moo Housing receive a signature."""
