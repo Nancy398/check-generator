@@ -7,4 +7,4 @@ reportlab
 num2words
 PyPDF2
 PyMuPDF
-openpyxl 
+openpyxl==3.1.5
