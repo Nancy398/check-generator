@@ -161,24 +161,30 @@ def load_stage_presets():
 
     return df_combined
     
-def get_pdf_template_bytes(account_num, custom_uploaded_bytes=None):
-    """根据账号匹配对应的 PDF 模板，如果上传了自定义模板则优先使用"""
-    if custom_uploaded_bytes:
-        return custom_uploaded_bytes
-    
-    # 判断账号是否为 ACC-3738
-    if str(account_num).strip().upper() == "ACC-8652":
-        if os.path.exists(ACC_8652_TEMPLATE_PATH):
-            with open(ACC_8652_TEMPLATE_PATH, "rb") as f:
-                return f.read()
-        else:
-            st.warning(f"⚠ 未找到 `{ACC_8652_TEMPLATE_PATH}` 模板文件，已回退使用默认模板。")
+def get_pdf_template(account_num, custom_uploaded_bytes=None, override_filename=None):
+    """Return (PDF bytes, template kind). Signature policy follows template kind."""
+    if custom_uploaded_bytes is not None:
+        name = os.path.basename(str(override_filename or '')).lower()
+        if '3738' in name:
+            return custom_uploaded_bytes, '3738'
+        if '8652' in name or name == 'check_run.pdf':
+            return custom_uploaded_bytes, '8652'
+        # An unknown override must be classified explicitly, never silently signed.
+        return custom_uploaded_bytes, 'custom'
 
-    # 默认模板加载
-    if os.path.exists(DEFAULT_TEMPLATE_PATH):
-        with open(DEFAULT_TEMPLATE_PATH, "rb") as f:
-            return f.read()
-    return None
+    normalized = re.sub(r'[^A-Z0-9]', '', str(account_num or '').upper())
+    is_8652 = normalized in ('8652', 'ACC8652') or normalized.endswith('8652')
+    filename = ACC_8652_TEMPLATE_PATH if is_8652 else DEFAULT_TEMPLATE_PATH
+    kind = '8652' if is_8652 else '3738'
+    if not os.path.isfile(filename):
+        return None, kind  # Do not fall back to a different bank's template.
+    with open(filename, 'rb') as f:
+        return f.read(), kind
+
+
+def get_pdf_template_bytes(account_num, custom_uploaded_bytes=None):
+    """Backwards-compatible helper for any external references."""
+    return get_pdf_template(account_num, custom_uploaded_bytes)[0]
 
 # 加载云端预设数据
 df_projects = load_project_presets()
@@ -485,7 +491,7 @@ mode = st.sidebar.radio(
     ],
 )
 st.sidebar.markdown('### Signature')
-st.sidebar.caption('ACC-3738 only. Signature is loaded automatically from Streamlit Secrets; upload is optional.')
+st.sidebar.caption('Every PDF using the 3738 template is automatically signed. 8652 is unsigned. Upload is optional when Secrets are set.')
 signature_upload = st.sidebar.file_uploader('Override signature (optional PNG/JPG)', type=['png', 'jpg', 'jpeg'], key='signature_file')
 signature_raw = None
 signature_source = None
@@ -530,24 +536,28 @@ if signature_raw:
 else:
     st.sidebar.error(signature_error or 'No signature found. Set CHECK_SIGNATURE_BASE64 in Streamlit Secrets or upload a PNG/JPG.')
 
-use_signature = st.sidebar.checkbox('Include signature for ACC-3738', value=bool(signature_raw), disabled=not bool(signature_raw))
+st.sidebar.info('3738 signature is mandatory and automatic; no checkbox required.')
 with st.sidebar.expander('Signature placement on PDF template'):
     signature_x = st.number_input('X from left (pt)', value=390.0, step=5.0)
     signature_y = st.number_input('Y from top (pt)', value=145.0, step=5.0)
     signature_width = st.number_input('Signature width (pt)', value=160.0, min_value=20.0, step=5.0)
-    st.caption('Only ACC-3738 outside Moo Housing is signed. Verify placement on a test PDF before printing.')
-active_signature = signature_raw if use_signature else None
-if signature_raw and not use_signature:
-    st.sidebar.info('Signature loaded, but the Include signature checkbox is off.')
+    st.caption('All checks using the 3738 template are signed, regardless of account or company. Verify placement on a test PDF.')
 
-def signature_for_check(company, account):
-    """Only ACC-3738 checks outside Moo Housing receive a signature."""
-    account_key = str(account or '').strip().upper().replace(' ', '')
-    company_key = str(company or '').strip().casefold()
-    if account_key != 'ACC-3738' or 'moo housing' in company_key:
+def signature_for_template(template_kind):
+    """Every check using the 3738 template MUST be signed."""
+    if template_kind != '3738':
         return None
-    return active_signature
+    if not signature_raw:
+        raise ValueError('3738 template requires a signature, but CHECK_SIGNATURE_BASE64 could not be loaded.')
+    return signature_raw
 
+
+def signature_status(template_kind):
+    if template_kind == '3738':
+        return 'SIGNATURE WILL BE ADDED' if signature_raw else 'ERROR: 3738 signature missing; generation blocked'
+    if template_kind == '8652':
+        return 'Unsigned: 8652 template'
+    return 'Unsigned: custom template (name the PDF with 3738 to enable signing)'
 
 custom_uploaded_bytes = None
 uploaded_tpl = st.sidebar.file_uploader("Upload Override Template (Optional)", type=["pdf"])
@@ -754,7 +764,7 @@ if mode == "📝 Single Mannul Check":
         amount_words = number_to_words_usd(pay_amount)
 
     # **根据账户名称获取对应模板数据**
-    current_pdf_template_bytes = get_pdf_template_bytes(account_num, custom_uploaded_bytes)
+    current_pdf_template_bytes, current_template_kind = get_pdf_template(account_num, custom_uploaded_bytes, uploaded_tpl.name if uploaded_tpl else None)
 
     if not current_pdf_template_bytes:
         st.error("❌ 无法匹配并加载指定的 PDF 模板，请确认对应 PDF 文件已放置在项目跟目录下。")
@@ -770,7 +780,13 @@ if mode == "📝 Single Mannul Check":
         "account": account_num,
     }
     
-    filled_pdf = signature_pdf(fill_pdf_placeholders(current_pdf_template_bytes, replacements), signature_for_check(company_display, account_num), signature_x, signature_y, signature_width)
+    st.info(f"Template: {current_template_kind} | Signature: {signature_status(current_template_kind)}")
+    try:
+        required_signature = signature_for_template(current_template_kind)
+        filled_pdf = signature_pdf(fill_pdf_placeholders(current_pdf_template_bytes, replacements), required_signature, signature_x, signature_y, signature_width)
+    except Exception as exc:
+        st.error(f'Cannot generate check: {exc}')
+        st.stop()
 
     with col2:
         st.subheader("👁 Check Preview")
@@ -1100,13 +1116,24 @@ elif mode == "👷 Construction Bulk Checks":
 
     st.markdown("---")
 
+    if not df_payroll_input.empty:
+        signature_report = df_payroll_input.apply(lambda r: signature_status(get_pdf_template(r.get('Account', ''), custom_uploaded_bytes, uploaded_tpl.name if uploaded_tpl else None)[1]), axis=1)
+        st.caption('Signature check before generating:')
+        st.dataframe(pd.DataFrame({'Payee': df_payroll_input['Payee'].values, 'Account': df_payroll_input['Account'].values, 'Signature': signature_report.values}), hide_index=True, use_container_width=True)
+
     # ----------------- 4. Batch generate (one persistent PDF) -----------------
     if not df_payroll_input.empty:
         dup = df_payroll_input.duplicated(subset=['Company', 'Account', 'Check #'], keep=False)
         if dup.any():
             st.error('Duplicate check numbers within the same company/account. Please correct before generating.')
+        missing_required_sig = (not signature_raw) and any(
+            get_pdf_template(row.get('Account', ''), custom_uploaded_bytes, uploaded_tpl.name if uploaded_tpl else None)[1] == '3738'
+            for _, row in df_payroll_input.iterrows()
+        )
+        if missing_required_sig:
+            st.error('3738 template selected but no signature loaded. Fix CHECK_SIGNATURE_BASE64 before generating.')
         if st.button(f'🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks',
-                     type='primary', use_container_width=True, disabled=bool(dup.any())):
+                     type='primary', use_container_width=True, disabled=bool(dup.any()) or missing_required_sig):
             pdf_items, records_log, issues = [], [], []
             for idx, row in df_payroll_input.iterrows():
                 payee, project = clean_cell(row.get('Payee', '')), clean_cell(row.get('Project', ''))
@@ -1130,13 +1157,13 @@ elif mode == "👷 Construction Bulk Checks":
                     'amount': f'{amount:,.2f}', 'amount_words': number_to_words_usd(float(amount)),
                     'memo': memo, 'number': str(number), 'account': account
                 }
-                template = get_pdf_template_bytes(account, custom_uploaded_bytes)
+                template, template_kind = get_pdf_template(account, custom_uploaded_bytes, uploaded_tpl.name if uploaded_tpl else None)
                 if not template:
                     issues.append(f'Row {idx+1}: missing PDF template for account {account}')
                     continue
                 try:
                     pdf = fill_pdf_placeholders(template, replacements)
-                    pdf = signature_pdf(pdf, signature_for_check(company, account), signature_x, signature_y, signature_width)
+                    pdf = signature_pdf(pdf, signature_for_template(template_kind), signature_x, signature_y, signature_width)
                 except Exception as exc:
                     issues.append(f'Row {idx+1}: PDF error: {exc}')
                     continue
