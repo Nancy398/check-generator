@@ -318,21 +318,50 @@ def clean_cell(value):
     return str(value).strip()
 
 
-def project_from_token(token):
+def project_candidates(token):
+    """Prioritize exact code, then a standalone leading project number, then standalone number anywhere."""
     token = clean_cell(token)
     if not token or df_projects.empty:
-        return None
-    normalized = re.sub(r"[^a-z0-9]", "", token.lower())
-    candidates = []
-    for _, p in df_projects.iterrows():
-        name = clean_cell(p.get("Project_Name", ""))
-        code = clean_cell(p.get("Project_Code", ""))
-        if normalized in (re.sub(r"[^a-z0-9]", "", name.lower()), re.sub(r"[^a-z0-9]", "", code.lower())):
-            candidates.append(name)
-        elif normalized.isdigit() and re.search(r"(?<!\d)" + re.escape(normalized) + r"(?!\d)", name):
-            candidates.append(name)
-    candidates = list(dict.fromkeys(candidates))
+        return []
+    norm = lambda v: re.sub(r"[^a-z0-9]", "", clean_cell(v).casefold())
+    key = norm(token)
+    rows = [(clean_cell(r.get('Project_Name', '')), clean_cell(r.get('Project_Code', '')))
+            for _, r in df_projects.iterrows()]
+    tiers = [
+        [name for name, code in rows if name and code and norm(code) == key],
+        [name for name, code in rows if name and norm(name) == key],
+        [name for name, code in rows if name and re.match(r"^\s*" + re.escape(token) + r"(?!\d)(?:\b|[ _\-#])", name, re.I)] if token.isdigit() else [],
+        [name for name, code in rows if name and re.search(r"(?<!\d)" + re.escape(token) + r"(?!\d)", name)] if token.isdigit() else [],
+    ]
+    for tier in tiers:
+        unique = list(dict.fromkeys(tier))
+        if unique:
+            return unique
+    return []
+
+
+def project_from_token(token, overrides=None):
+    if overrides and token in overrides:
+        return overrides[token]
+    candidates = project_candidates(token)
     return candidates[0] if len(candidates) == 1 else None
+
+
+def csv_project_tokens(upload):
+    raw = upload.getvalue()
+    try:
+        content = raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        content = raw.decode('gb18030')
+    frame = pd.read_csv(io.StringIO(content), dtype=str, keep_default_na=False)
+    frame.columns = [str(c).strip() for c in frame.columns]
+    project_col = 'Projects' if 'Projects' in frame else 'Project' if 'Project' in frame else None
+    if project_col is None:
+        return []
+    tokens = []
+    for value in frame[project_col]:
+        tokens.extend(t.strip() for t in re.split(r'[/;,]', clean_cell(value)) if t.strip())
+    return list(dict.fromkeys(tokens))
 
 
 def even_split(total, count):
@@ -380,7 +409,7 @@ def latest_stage_for(payee, project, history):
     return '', '', ''
 
 
-def import_csv_rows(upload, history):
+def import_csv_rows(upload, history, project_overrides=None):
     # utf-8-sig handles CSVs saved by Excel with BOM; dtype=str preserves project codes.
     raw = upload.getvalue()
     try:
@@ -414,16 +443,13 @@ def import_csv_rows(upload, history):
         tokens = [t.strip() for t in re.split(r'[/;,]', raw_projects) if t.strip()]
         amounts = even_split(total, len(tokens))
         for token, amount in zip(tokens, amounts):
-            project = project_from_token(token)
-            if not project:
-                errors.append(f'CSV row {csv_row}: project {token!r} not uniquely matched')
-                continue
-            p = df_projects[df_projects['Project_Name'] == project].iloc[0]
-            company, account = clean_cell(p.get('Company', '')), clean_cell(p.get('Account', ''))
-            if not company or not account:
-                errors.append(f'CSV row {csv_row}: missing company/account for {project}')
-                continue
-            stage, sub, historical_memo = latest_stage_for(payee, project, history)
+            project = project_from_token(token, project_overrides)
+            if project:
+                p = df_projects[df_projects['Project_Name'] == project].iloc[0]
+                company, account = clean_cell(p.get('Company', '')), clean_cell(p.get('Account', ''))
+            else:
+                company, account = '', ''  # Resolve safely in Review & Edit.
+            stage, sub, historical_memo = latest_stage_for(payee, project, history) if project else ('', '', '')
             explicit_stage = clean_cell(row.get('Stage', ''))
             explicit_sub = clean_cell(row.get('Sub-Stage', row.get('Sub_Stage', '')))
             if explicit_stage:
@@ -445,7 +471,7 @@ def import_csv_rows(upload, history):
             result.append({'Company': company, 'Payee': payee, 'Project': project,
                            'Account': account, 'Stage': stage, 'Sub-Stage': sub,
                            'Days': None, 'Rate': None, 'Check #': 0,
-                           'Amount': float(amount), 'Memo': detail})
+                           'Amount': float(amount), 'Memo': detail, 'Project Code': token})
     return result, errors
 
 
@@ -459,7 +485,7 @@ def next_account_number(company, account, project, staged, history, project_star
     return max(max(used) + 1 if used else start, start)
 
 
-def signature_pdf(pdf_bytes, signature_bytes, x=420, y=155, width=160):
+def signature_pdf(pdf_bytes, signature_bytes, x=390, y=145, width=160):
     if not signature_bytes:
         return pdf_bytes
     doc = fitz.open(stream=pdf_bytes, filetype='pdf')
@@ -889,13 +915,14 @@ elif mode == "👷 Construction Bulk Checks":
     st.markdown('### 📥 Import CSV Payroll')
     st.caption('CSV columns: Payee, Total, Projects; optional Stage, Sub-Stage, Memo. Projects like 6528/83 are split evenly. In Excel use Save As → CSV UTF-8 (Comma delimited).')
     uploaded_csv = st.file_uploader('Upload weekly payroll CSV (.csv)', type=['csv'], key='bulk_csv_upload')
+    # Import all rows immediately; ambiguous codes are resolved inside Review & Edit.
     if st.button('Import CSV to Review List', disabled=uploaded_csv is None):
         try:
             history = read_file(GS_SPREADSHEET_NAME, GS_WORKSHEET_NAME)
             imported, import_errors = import_csv_rows(uploaded_csv, history)
             if import_errors:
                 st.session_state['csv_import_errors'] = import_errors
-                st.error('Import blocked. Fix these Excel rows and upload again: ' + '; '.join(import_errors[:15]))
+                st.error('Import blocked. Check these CSV rows: ' + '; '.join(import_errors[:15]))
             elif not imported:
                 st.warning('No payable records found.')
             else:
@@ -905,7 +932,7 @@ elif mode == "👷 Construction Bulk Checks":
                     staged.append(item)
                 st.session_state.payroll_list = staged
                 st.session_state.pop('csv_import_errors', None)
-                st.success(f'Imported {len(imported)} checks. Review Stage, Sub-Stage, Memo and accounts below.')
+                st.success(f'Imported {len(imported)} draft checks. Select any unresolved Projects in Review & Edit, then review Stage, Sub-Stage, Memo and account.')
                 st.rerun()
         except Exception as exc:
             st.error(f'CSV import failed: {exc}')
@@ -1109,6 +1136,7 @@ elif mode == "👷 Construction Bulk Checks":
                 "Company": st.column_config.SelectboxColumn("Company", options=["Development Company", "Moo Housing", "Moo Construction"], required=True),
                 "Payee": st.column_config.TextColumn("Payee", required=True),
                 "Project": st.column_config.SelectboxColumn("Project", options=[""] + preset_project_list),
+                "Project Code": st.column_config.TextColumn("CSV Project Code", disabled=True),
                 "Stage": st.column_config.SelectboxColumn("Stage", options=list(dict.fromkeys(stage_choices() + df_payroll_input.get("Stage", pd.Series(dtype=str)).dropna().astype(str).tolist()))),
                 "Sub-Stage": st.column_config.SelectboxColumn("Sub-Stage", options=list(dict.fromkeys(substage_choices() + df_payroll_input.get("Sub-Stage", pd.Series(dtype=str)).dropna().astype(str).tolist()))),
                 "Memo": st.column_config.TextColumn("Memo Detail"),
@@ -1120,6 +1148,38 @@ elif mode == "👷 Construction Bulk Checks":
             key="payroll_data_editor"
         )
         df_payroll_input = edited_df
+        # Resolve the selected project into its authoritative payer/account, and
+        # prefill historical Stage/Memo without overwriting user edits.
+        if st.button('↻ Apply Project selections & refresh defaults', help='After selecting unresolved Projects, click to match Company/Account and last used Stage.'):
+            history = read_file(GS_SPREADSHEET_NAME, GS_WORKSHEET_NAME)
+            synced = []
+            for _, record in edited_df.iterrows():
+                item = record.to_dict()
+                project = clean_cell(item.get('Project', ''))
+                if project in preset_project_list:
+                    info = df_projects[df_projects['Project_Name'] == project].iloc[0]
+                    old_project = next((clean_cell(x.get('Project', '')) for x in st.session_state.payroll_list
+                                        if clean_cell(x.get('Payee', '')) == clean_cell(item.get('Payee', ''))
+                                        and clean_cell(x.get('Project Code', '')) == clean_cell(item.get('Project Code', ''))), '')
+                    item['Company'] = clean_cell(info.get('Company', ''))
+                    item['Account'] = clean_cell(info.get('Account', ''))
+                    if project != old_project:
+                        stage, sub, memo = latest_stage_for(clean_cell(item.get('Payee', '')), project, history)
+                        if not stage and not df_workers.empty:
+                            match = df_workers[df_workers['Worker_Name'].astype(str).str.casefold() == clean_cell(item.get('Payee', '')).casefold()]
+                            if not match.empty:
+                                stage = clean_cell(match.iloc[0].get('Stage', ''))
+                                sub = clean_cell(match.iloc[0].get('Sub_Stage', ''))
+                        if stage: item['Stage'] = stage
+                        if sub: item['Sub-Stage'] = sub
+                        if memo:
+                            item['Memo'] = memo[len(project)+3:] if memo.startswith(project + ' - ') else memo
+                        elif stage:
+                            item['Memo'] = f'{stage} - {sub}' if sub else stage
+                    item['Check #'] = next_account_number(item['Company'], item['Account'], project, synced, history, proj_start_nums)
+                synced.append(item)
+            st.session_state.payroll_list = synced
+            st.rerun()
     else:
         st.info("💡 暂无待处理支票，请在上方添加数据。")
 
@@ -1135,6 +1195,18 @@ elif mode == "👷 Construction Bulk Checks":
         dup = df_payroll_input.duplicated(subset=['Company', 'Account', 'Check #'], keep=False)
         if dup.any():
             st.error('Duplicate check numbers within the same company/account. Please correct before generating.')
+        invalid_project_rows = []
+        for i, record in df_payroll_input.iterrows():
+            project = clean_cell(record.get('Project', ''))
+            if project not in preset_project_list:
+                invalid_project_rows.append(f'Row {i+1}: select Project for code {clean_cell(record.get("Project Code", ""))}')
+            else:
+                p = df_projects[df_projects['Project_Name'] == project].iloc[0]
+                if (clean_cell(record.get('Company', '')) != clean_cell(p.get('Company', '')) or
+                    clean_cell(record.get('Account', '')) != clean_cell(p.get('Account', ''))):
+                    invalid_project_rows.append(f'Row {i+1}: click Apply Project selections to sync Company/Account')
+        if invalid_project_rows:
+            st.warning('Before generating: ' + '; '.join(invalid_project_rows[:12]))
         missing_required_sig = (not signature_raw) and any(
             get_pdf_template(row.get('Account', ''), custom_uploaded_bytes, uploaded_tpl.name if uploaded_tpl else None)[1] == '3738'
             for _, row in df_payroll_input.iterrows()
@@ -1142,7 +1214,7 @@ elif mode == "👷 Construction Bulk Checks":
         if missing_required_sig:
             st.error('3738 template selected but no signature loaded. Fix CHECK_SIGNATURE_BASE64 before generating.')
         if st.button(f'🚀 Confirm & Batch Generate {len(df_payroll_input)} Checks',
-                     type='primary', use_container_width=True, disabled=bool(dup.any()) or missing_required_sig):
+                     type='primary', use_container_width=True, disabled=bool(dup.any()) or missing_required_sig or bool(invalid_project_rows)):
             pdf_items, records_log, issues = [], [], []
             for idx, row in df_payroll_input.iterrows():
                 payee, project = clean_cell(row.get('Payee', '')), clean_cell(row.get('Project', ''))
